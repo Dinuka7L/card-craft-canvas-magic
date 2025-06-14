@@ -8,4 +8,7 @@ export interface TextOverlay {
   color: string;
   font: string;
   size: number;
+  x: number; // 0-1 normalized position
+  y: number; // 0-1 normalized position
+  z: number; // integer for z-index/layer ordering
 }

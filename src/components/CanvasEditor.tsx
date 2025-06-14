@@ -28,6 +28,7 @@ interface CanvasEditorProps {
 interface OverlayState extends TextOverlay {
   x: number;
   y: number;
+  z: number;
 }
 
 const AVAILABLE_FONTS = [
@@ -73,6 +74,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
     text: "Happy Birthday!",
     x: 0.15,
     y: 0.44,
+    z: 0,
     color: "#fff",
     font: "Playfair Display",
     size: 48,
@@ -245,7 +247,8 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
         color: "#fff",
         font: "Playfair Display",
         size: 32,
-        x: 0.5, y: 0.8
+        x: 0.5, y: 0.8,
+        z: arr.length,
       }
     ]);
     setSelectedOverlay(overlays.length);
@@ -358,6 +361,10 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
                 onChange={patch => handleOverlayChange(idx, patch)}
                 onDelete={overlays.length > 1 ? () => handleRemoveOverlay(idx) : undefined}
                 isSelected={selectedOverlay === idx}
+                maxOverlays={overlays.length}
+                overlays={overlays}
+                idx={idx}
+                setOverlays={setOverlays}
               />
             </div>
           ))}
@@ -417,25 +424,28 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
           />
         )}
         {/* Drag handles and text overlays */}
-        {overlays.map((overlay, idx) => (
-          <DraggableTextOverlay
-            key={idx}
-            overlay={overlay}
-            idx={idx}
-            previewW={previewW}
-            previewH={previewH}
-            tplDims={tplDims}
-            selected={selectedOverlay === idx}
-            onDrag={(i, x, y) => {
-              setOverlays(ovr => {
-                const arr = [...ovr];
-                arr[i] = { ...arr[i], x, y };
-                return arr;
-              });
-              setConfirmed(false);
-            }}
-            onClick={setSelectedOverlay}
-          />
+        {[...overlays]
+          .map((ovl, idx) => ({...ovl, _idx: idx}))
+          .sort((a, b) => (a.z ?? 0) - (b.z ?? 0))
+          .map((overlay, ix) => (
+            <DraggableTextOverlay
+              key={overlay._idx}
+              overlay={overlay}
+              idx={overlay._idx}
+              previewW={previewW}
+              previewH={previewH}
+              tplDims={tplDims}
+              selected={selectedOverlay === overlay._idx}
+              onDrag={(i, x, y) => {
+                setOverlays(ovr => {
+                  const arr = [...ovr];
+                  arr[i] = { ...arr[i], x, y };
+                  return arr;
+                });
+                setConfirmed(false);
+              }}
+              onClick={setSelectedOverlay}
+            />
         ))}
         <canvas
           ref={canvasRef}

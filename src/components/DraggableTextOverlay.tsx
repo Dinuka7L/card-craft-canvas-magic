@@ -4,7 +4,7 @@ import { useDraggableOverlay } from "./useDraggableOverlay";
 import { TextOverlay } from "./types/TextOverlay";
 
 interface DraggableTextOverlayProps {
-  overlay: TextOverlay & { x: number; y: number };
+  overlay: TextOverlay;
   idx: number;
   previewW: number;
   previewH: number;
@@ -40,7 +40,7 @@ export const DraggableTextOverlay: React.FC<DraggableTextOverlayProps> = ({
         position: "absolute",
         left: px,
         top: py,
-        zIndex: 10,
+        zIndex: (typeof overlay.z === "number" ? overlay.z : 0) + 10,
         transform: "translate(0,0)",
         color: overlay.color,
         fontFamily: `${overlay.font}, Inter, Playfair Display, serif`,
