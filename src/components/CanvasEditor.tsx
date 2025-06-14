@@ -1,3 +1,4 @@
+
 import React, { useRef, useState, useEffect } from "react";
 import { toast } from "@/hooks/use-toast";
 import { Image as ImageIcon } from "lucide-react";
@@ -48,12 +49,11 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
   ]);
   const [selectedTextId, setSelectedTextId] = useState<string>("main");
 
-  // To keep width/height configs in one place and scale everything
+  // Canvas size
   const CANVAS_W = 350, CANVAS_H = 500;
-  // For smooth resize/move on photo
   const [dragMode, setDragMode] = useState<"move" | "none">("none");
 
-  // Enable drag & move image (profile photo)
+  // Drag/move image (profile photo)
   const handleImgMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
     setDragMode("move");
@@ -87,7 +87,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
     // eslint-disable-next-line
   }, [isDragging, dragMode, dragStart]);
 
-  // Handle user uploads a profile image
+  // Handle image upload
   const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -112,7 +112,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
     setImgPos(imgInit);
   };
 
-  // Add a new text overlay
+  // Add new text overlay
   const handleAddText = () => {
     const newId = "txt" + Math.random().toString(36).slice(2);
     setTextOverlays(ovl => [
@@ -131,7 +131,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
     toast({ title: "Added new text overlay!" });
   };
 
-  // When canvas needs to be downloaded as image
+  // Download/export the canvas in the selected format
   const handleDownload = (format: "png" | "jpeg") => {
     // Create a temporary offscreen canvas for export
     const canvas = document.createElement("canvas");
@@ -141,9 +141,13 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
     // Draw background (template)
     const template = new window.Image();
     template.crossOrigin = "anonymous";
-    template.src = TEMPLATE_MAP[templateId].img;
+    template.src = TEMPLATE_MAP[templateId].img.startsWith("/")
+      ? `${window.location.origin}${TEMPLATE_MAP[templateId].img}`
+      : TEMPLATE_MAP[templateId].img;
     template.onload = () => {
       ctx.drawImage(template, 0, 0, CANVAS_W, CANVAS_H);
+
+      // Draw profile image (crop and placement applied)
       if (profileImg) {
         const img = new window.Image();
         img.src = profileImg;
@@ -159,37 +163,64 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
           ctx.clip();
           ctx.drawImage(
             img,
-            imgPos.x, imgPos.y,
-            150 * imgPos.scale, 150 * imgPos.scale
+            imgPos.x,
+            imgPos.y,
+            150 * imgPos.scale,
+            150 * imgPos.scale
           );
           ctx.restore();
+
+          // Draw text overlays
           textOverlays.forEach(ovl => {
             ctx.font = `${ovl.size}px '${ovl.font}'`;
             ctx.fillStyle = ovl.color;
             ctx.fillText(ovl.text, ovl.x, ovl.y);
           });
+
           let mime = (format === "png" ? "image/png" : "image/jpeg");
           const link = document.createElement("a");
           link.download = `birthday-card.${format}`;
           link.href = canvas.toDataURL(mime, 1.0);
+          document.body.appendChild(link);
           link.click();
+          document.body.removeChild(link);
+
+          toast({
+            title: "Download started!",
+            description: `Your card is downloading as ${format.toUpperCase()}.`
+          });
+        };
+        img.onerror = () => {
+          toast({ title: "Image download error", description: "Could not load your photo." });
         };
       } else {
+        // If no profile image, just draw overlays
         textOverlays.forEach(ovl => {
           ctx.font = `${ovl.size}px '${ovl.font}'`;
           ctx.fillStyle = ovl.color;
           ctx.fillText(ovl.text, ovl.x, ovl.y);
         });
+
         let mime = (format === "png" ? "image/png" : "image/jpeg");
         const link = document.createElement("a");
         link.download = `birthday-card.${format}`;
         link.href = canvas.toDataURL(mime, 1.0);
+        document.body.appendChild(link);
         link.click();
+        document.body.removeChild(link);
+
+        toast({
+          title: "Download started!",
+          description: `Your card is downloading as ${format.toUpperCase()}.`
+        });
       }
+    };
+    template.onerror = () => {
+      toast({ title: "Template image error", description: "Could not load background." });
     };
   };
 
-  // Drag/move & edit text overlays
+  // onChange for text overlays
   const onChangeTextOverlay = (id: string, patch: Partial<TextOverlay>) => {
     setTextOverlays(ovl =>
       ovl.map(txt =>
@@ -198,28 +229,10 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
     );
   };
 
-  // Allow dragging text overlays
-  const handleTextMouseDown = (id: string, e: React.MouseEvent) => {
-    e.preventDefault();
-    setSelectedTextId(id);
-    const startX = e.clientX, startY = e.clientY;
-    const idx = textOverlays.findIndex(t => t.id === id);
-    const orig = { x: textOverlays[idx].x, y: textOverlays[idx].y };
-    const onMove = (ev: MouseEvent) => {
-      const dx = ev.clientX - startX;
-      const dy = ev.clientY - startY;
-      onChangeTextOverlay(id, { x: orig.x + dx, y: orig.y + dy });
-    };
-    const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  };
-
   // Load actual selected template
-  const templateImg = TEMPLATE_MAP[templateId]?.img;
+  const templateImg = TEMPLATE_MAP[templateId]?.img.startsWith("/")
+    ? `${window.location.origin}${TEMPLATE_MAP[templateId]?.img}`
+    : TEMPLATE_MAP[templateId]?.img;
 
   return (
     <div className="flex flex-col xl:flex-row gap-8 w-full max-w-full">
@@ -246,26 +259,10 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
           onReset={handleResetImg}
           isImageLoaded={!!profileImg}
         />
-        {/* Add Text Overlay and Text Overlay Controls (as before) */}
+        {/* Add Text Overlay and Text Overlay Controls */}
         <button
           className="bg-accent px-3 py-2 rounded focus:outline-none text-foreground hover:bg-accent/70 transition text-sm"
-          onClick={() => {
-            const newId = "txt" + Math.random().toString(36).slice(2);
-            setTextOverlays(ovl => [
-              ...ovl,
-              {
-                id: newId,
-                text: "Write here",
-                x: 100,
-                y: 300,
-                font: "Inter",
-                color: "#222",
-                size: 24,
-              }
-            ]);
-            setSelectedTextId(newId);
-            toast({ title: "Added new text overlay!" });
-          }}
+          onClick={handleAddText}
         >
           + Add Text Overlay
         </button>
@@ -280,10 +277,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
           }
         />
         <DownloadDropdown
-          onDownload={format => {
-            // ... keep download logic the same
-            // (You may move full export logic here if needed, otherwise just keep download as before)
-          }}
+          onDownload={format => handleDownload(format)}
         />
       </div>
       {/* Canvas area */}
@@ -385,3 +379,4 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
     </div>
   );
 };
+
