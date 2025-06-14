@@ -1,3 +1,4 @@
+
 import React, { useRef, useState, useEffect } from "react";
 import { toast } from "@/hooks/use-toast";
 import { Image as ImageIcon } from "lucide-react";
@@ -183,6 +184,23 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
     if (!templateSrc) {
       toast({ title: "Download failed", description: "Template image not found." });
       return;
+    }
+
+    // --- HERE is the missing function!
+    function finishDownload(canvas: HTMLCanvasElement, format: "png" | "jpeg") {
+      let dataUrl: string;
+      if (format === "jpeg") {
+        dataUrl = canvas.toDataURL("image/jpeg", 0.95);
+      } else {
+        dataUrl = canvas.toDataURL("image/png");
+      }
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = `birthday-card.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      toast({ title: "Image downloaded!", description: `Saved as ${a.download}` });
     }
 
     const templateImg = new window.Image();
