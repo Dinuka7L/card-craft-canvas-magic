@@ -5,13 +5,19 @@ import { TextOverlayControls } from "./TextOverlayControls";
 import { DownloadDropdown } from "./DownloadDropdown";
 import { ImageCropperControls } from "./ImageCropperControls";
 
-// Placeholder template map
-const TEMPLATE_MAP: Record<string, { name: string; img: string }> = {
-  template1: { name: "Starry Night", img: "/photo-1470813740244-df37b8c1edcb" },
-  template2: { name: "Sunlit Forest", img: "/photo-1500673922987-e212871fec22" },
-  template3: { name: "Orange Blossoms", img: "/photo-1465146344425-f00d5f5c8f07" },
-  template4: { name: "Living Room", img: "/photo-1721322800607-8c38375eef04" },
-};
+// Map template images using import.meta.glob and load templates from JSON:
+const imageMap: Record<string, string> = {};
+const imgRequire = import.meta.glob('../templates/*.{jpg,png,jpeg,gif,webp,avif,svg}', { eager: true, as: 'url' });
+Object.entries(imgRequire).forEach(([key, value]) => {
+  const fileName = key.split('/').pop()!;
+  imageMap[fileName] = value as string;
+});
+
+interface TemplateMeta {
+  id: string;
+  name: string;
+  img: string;
+}
 
 export interface TextOverlay {
   id: string;
@@ -47,6 +53,13 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
     },
   ]);
   const [selectedTextId, setSelectedTextId] = useState<string>("main");
+
+  const [templates, setTemplates] = useState<TemplateMeta[]>([]);
+  useEffect(() => {
+    import("../templates/templates.json").then(json => {
+      setTemplates(json.default ?? json);
+    });
+  }, []);
 
   // Canvas size
   const CANVAS_W = 350, CANVAS_H = 500;
@@ -166,12 +179,14 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
     canvas.width = CANVAS_W;
     canvas.height = CANVAS_H;
     const ctx = canvas.getContext("2d")!;
+    const selTpl = templates.find(tpl => tpl.id === templateId);
+    const templateImgName = selTpl?.img || "";
+    const templateSrc = imageMap[templateImgName] || "";
+
     // Draw background (template)
     const template = new window.Image();
     template.crossOrigin = "anonymous";
-    template.src = TEMPLATE_MAP[templateId].img.startsWith("/")
-      ? `${window.location.origin}${TEMPLATE_MAP[templateId].img}`
-      : TEMPLATE_MAP[templateId].img;
+    template.src = templateSrc;
     template.onload = () => {
       ctx.drawImage(template, 0, 0, CANVAS_W, CANVAS_H);
 
@@ -249,10 +264,10 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
     );
   };
 
-  // Load actual selected template
-  const templateImg = TEMPLATE_MAP[templateId]?.img.startsWith("/")
-    ? `${window.location.origin}${TEMPLATE_MAP[templateId]?.img}`
-    : TEMPLATE_MAP[templateId]?.img;
+  // Load actual selected template image
+  const selTpl = templates.find(tpl => tpl.id === templateId);
+  const templateImgName = selTpl?.img || "";
+  const templateImg = imageMap[templateImgName] || "";
 
   return (
     <div className="flex flex-col xl:flex-row gap-8 w-full max-w-full">
