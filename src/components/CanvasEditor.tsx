@@ -175,81 +175,112 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
 
   // Download/export the canvas in the selected format
   const handleDownload = (format: "png" | "jpeg") => {
-    // Create a temporary offscreen canvas for export
-    const canvas = document.createElement("canvas");
-    canvas.width = CANVAS_W;
-    canvas.height = CANVAS_H;
-    const ctx = canvas.getContext("2d")!;
     const selTpl = templates.find(tpl => tpl.id === templateId);
     const templateImgName = selTpl?.img || "";
     const templateSrc = imageMap[templateImgName] || "";
 
-    // We will: (1) draw the uploaded profile image,
-    //          (2) draw overlays (text) with the right font/positions,
-    //          (3) draw the template on top (as a frame/foreground)
+    if (!templateSrc) {
+      toast({ title: "Download failed", description: "Template image not found." });
+      return;
+    }
 
-    // 1. Draw uploaded image (if any)
-    const drawAll = () => {
+    const templateImg = new window.Image();
+    templateImg.crossOrigin = "anonymous";
+    templateImg.src = templateSrc;
+
+    templateImg.onload = () => {
+      const ORIG_W = templateImg.naturalWidth || templateImg.width;
+      const ORIG_H = templateImg.naturalHeight || templateImg.height;
+
+      // Calculate scaling factors between preview and real size
+      const SCALE_X = ORIG_W / 350;
+      const SCALE_Y = ORIG_H / 500;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = ORIG_W;
+      canvas.height = ORIG_H;
+      const ctx = canvas.getContext("2d")!;
+
+      // 1. Draw the template/base image at full-res (as background)
+      ctx.drawImage(templateImg, 0, 0, ORIG_W, ORIG_H);
+
+      // 2. Draw the uploaded profile photo, scaled + positioned for hi-res
       if (profileImg) {
-        const img = new window.Image();
-        img.src = profileImg;
-        img.crossOrigin = "anonymous";
-        img.onload = () => {
+        const photo = new window.Image();
+        photo.crossOrigin = "anonymous";
+        photo.src = profileImg;
+        photo.onload = () => {
           ctx.save();
-          // Use the same size and positions as live canvas
           ctx.drawImage(
-            img,
-            imgPos.x,
-            imgPos.y,
-            150 * imgPos.scale,
-            150 * imgPos.scale
+            photo,
+            imgPos.x * SCALE_X,
+            imgPos.y * SCALE_Y,
+            150 * imgPos.scale * SCALE_X,
+            150 * imgPos.scale * SCALE_Y
           );
           ctx.restore();
-          // 2. Draw text overlays
+
+          // 3. Draw text overlays ON TOP of everything
           textOverlays.forEach(ovl => {
-            ctx.font = `${ovl.size}px '${ovl.font}'`;
+            ctx.font = `${ovl.size * SCALE_Y}px '${ovl.font}'`;
             ctx.fillStyle = ovl.color;
             ctx.textBaseline = "top";
-            ctx.fillText(ovl.text, ovl.x, ovl.y);
+            ctx.textAlign = "left";
+            // Add shadow for legibility
+            ctx.shadowColor = "#000";
+            ctx.shadowBlur = 8;
+            ctx.fillText(
+              ovl.text,
+              ovl.x * SCALE_X,
+              ovl.y * SCALE_Y
+            );
+            ctx.shadowBlur = 0;
           });
-          // 3. Draw the template last (on TOP)
-          const template = new window.Image();
-          template.crossOrigin = "anonymous";
-          template.src = templateSrc;
-          template.onload = () => {
-            ctx.drawImage(template, 0, 0, CANVAS_W, CANVAS_H);
-            finish();
-          };
-          template.onerror = finish;
+
+          finishDownload(canvas, format);
         };
-        img.onerror = () => {
-          // Fallback: just text & template
-          drawTextAndTemplateOnly(ctx, templateSrc, finish);
+        photo.onerror = () => {
+          // If photo fails: draw just template and text overlays
+          drawTextOnly(ctx, SCALE_X, SCALE_Y, canvas, format);
         };
       } else {
-        // No photo: just draw text and template
-        drawTextAndTemplateOnly(ctx, templateSrc, finish);
+        // No photo, only template + text overlays
+        drawTextOnly(ctx, SCALE_X, SCALE_Y, canvas, format);
       }
     };
 
-    const drawTextAndTemplateOnly = (ctx: CanvasRenderingContext2D, templateSrc: string, cb: () => void) => {
-      textOverlays.forEach(ovl => {
-        ctx.font = `${ovl.size}px '${ovl.font}'`;
-        ctx.fillStyle = ovl.color;
-        ctx.textBaseline = "top";
-        ctx.fillText(ovl.text, ovl.x, ovl.y);
+    templateImg.onerror = () => {
+      toast({
+        title: "Download failed",
+        description: "Could not load the template image.",
       });
-      const template = new window.Image();
-      template.crossOrigin = "anonymous";
-      template.src = templateSrc;
-      template.onload = () => {
-        ctx.drawImage(template, 0, 0, CANVAS_W, CANVAS_H);
-        cb();
-      };
-      template.onerror = cb;
     };
 
-    function finish() {
+    function drawTextOnly(
+      ctx: CanvasRenderingContext2D,
+      SCALE_X: number,
+      SCALE_Y: number,
+      canvas: HTMLCanvasElement,
+      format: "png" | "jpeg"
+    ) {
+      textOverlays.forEach(ovl => {
+        ctx.font = `${ovl.size * SCALE_Y}px '${ovl.font}'`;
+        ctx.fillStyle = ovl.color;
+        ctx.textBaseline = "top";
+        ctx.textAlign = "left";
+        ctx.shadowColor = "#000";
+        ctx.shadowBlur = 8;
+        ctx.fillText(
+          ovl.text,
+          ovl.x * SCALE_X,
+          ovl.y * SCALE_Y
+        );
+        ctx.shadowBlur = 0;
+      });
+      finishDownload(canvas, format);
+    }
+
+    function finishDownload(canvas: HTMLCanvasElement, format: "png" | "jpeg") {
       let mime = (format === "png" ? "image/png" : "image/jpeg");
       const link = document.createElement("a");
       link.download = `birthday-card.${format}`;
@@ -260,11 +291,9 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
 
       toast({
         title: "Download started!",
-        description: `Your card is downloading as ${format.toUpperCase()}.`
+        description: `Your card is downloading as ${format.toUpperCase()} at full resolution.`
       });
     }
-
-    drawAll();
   };
 
   // onChange for text overlays
