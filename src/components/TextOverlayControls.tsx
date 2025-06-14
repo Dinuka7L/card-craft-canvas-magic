@@ -1,6 +1,6 @@
 
 import React from "react";
-import { TextOverlay } from "./CanvasEditor";
+import { TextOverlay } from "./types/TextOverlay";
 import { Progress } from "./ui/progress";
 
 // Stylish color palette
