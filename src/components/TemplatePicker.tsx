@@ -33,7 +33,7 @@ export const TemplatePicker: React.FC<TemplatePickerProps> = ({
   selected,
   onSelect,
 }) => (
-  <div className="grid grid-cols-2 gap-6">
+  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
     {templates.map(tpl => (
       <button
         key={tpl.id}
@@ -41,8 +41,9 @@ export const TemplatePicker: React.FC<TemplatePickerProps> = ({
           selected === tpl.id ? "border-primary scale-105" : "border-card"
         }`}
         style={{
-          width: 180,
-          height: 260,
+          width: "100%",
+          maxWidth: 180,
+          height: 200,
           background: "#f8f9fa",
         }}
         onClick={() => onSelect(tpl.id)}
@@ -59,3 +60,4 @@ export const TemplatePicker: React.FC<TemplatePickerProps> = ({
     ))}
   </div>
 );
+
