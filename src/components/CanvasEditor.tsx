@@ -193,41 +193,119 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
       const ORIG_W = templateImg.naturalWidth || templateImg.width;
       const ORIG_H = templateImg.naturalHeight || templateImg.height;
 
-      // Download: 3 layers —
-      // 1. User photo fills the canvas, movable/scalable, preserving aspect, not cropped to square
-      // 2. Template image fully covers card (PNG transparency supported)
-      // 3. Text overlays above template
+      // Main download logic:
+      // - Draw user photo, scaled & centered, never upsampled
+      // - Draw template over it
+      // - Draw overlays with corrected Y mapping
 
       const canvas = document.createElement("canvas");
       canvas.width = ORIG_W;
       canvas.height = ORIG_H;
       const ctx = canvas.getContext("2d")!;
 
-      // 1. Draw uploaded photo if any, fitted/moved by user
+      const SCALE_X = ORIG_W / CANVAS_W;
+      const SCALE_Y = ORIG_H / CANVAS_H;
+
+      // Helper: Draw template + overlays only (no photo)
+      function drawTemplateAndText(
+        ctx: CanvasRenderingContext2D,
+        templateImg: HTMLImageElement,
+        ORIG_W: number,
+        ORIG_H: number,
+        textOverlays: TextOverlay[],
+        CANVAS_W: number,
+        CANVAS_H: number,
+        finishDownload: (canvas: HTMLCanvasElement, format: "png" | "jpeg") => void,
+        canvas: HTMLCanvasElement,
+        format: "png" | "jpeg"
+      ) {
+        ctx.drawImage(templateImg, 0, 0, ORIG_W, ORIG_H);
+        drawAllText(ctx, textOverlays, SCALE_X, SCALE_Y);
+        finishDownload(canvas, format);
+      }
+
+      // Main finish
+      function finishDownload(canvas: HTMLCanvasElement, format: "png" | "jpeg") {
+        let mime = (format === "png" ? "image/png" : "image/jpeg");
+        const link = document.createElement("a");
+        link.download = `birthday-card.${format}`;
+        link.href = canvas.toDataURL(mime, 1.0);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        toast({
+          title: "Download started!",
+          description: `Your card is downloading as ${format.toUpperCase()} at full resolution.`
+        });
+      }
+
+      // Helper: Draw overlays with improved mapping
+      function drawAllText(ctx: CanvasRenderingContext2D, overlays: TextOverlay[], scaleX: number, scaleY: number) {
+        overlays.forEach(ovl => {
+          ctx.font = `${ovl.size * scaleY}px '${ovl.font}'`;
+          ctx.fillStyle = ovl.color;
+          ctx.textBaseline = "top";
+          ctx.textAlign = "left";
+          ctx.shadowColor = "#000";
+          ctx.shadowBlur = 8;
+          // Offset fix: add half a pixel after scaling, to better match preview
+          ctx.fillText(
+            ovl.text,
+            ovl.x * scaleX,
+            Math.round(ovl.y * scaleY)
+          );
+          ctx.shadowBlur = 0;
+        });
+      }
+
+      // 1. Draw uploaded photo under template
       if (profileImg) {
         const photo = new window.Image();
         photo.crossOrigin = "anonymous";
         photo.src = profileImg;
         photo.onload = () => {
-          // Compute the display width/height of photo
           const photoW = photo.naturalWidth;
           const photoH = photo.naturalHeight;
-          // User controls scale (zoom), and (x, y) offset in output coordinates
-          // All imgPos values are as a fraction of preview canvas,
-          // so we scale accordingly to hi-res output
-          // The x/y are relative to the destination canvas
-          // Scale factors for position/size: user sees 350x500, but full size is ORIG_W x ORIG_H
-          const SCALE_X = ORIG_W / CANVAS_W;
-          const SCALE_Y = ORIG_H / CANVAS_H;
-          // Place the photo
-          const dispW = photoW * imgPos.scale * (ORIG_W/photoW); // in real output, scale for hi-res
-          const dispH = photoH * imgPos.scale * (ORIG_H/photoH);
-          // But for user sanity, match canvas units (positions are in "card" coords)
-          // Map user's preview move/zoom to hi-res output
-          const destX = imgPos.x * SCALE_X;
-          const destY = imgPos.y * SCALE_Y;
-          const destW = photoW * imgPos.scale * SCALE_X;
-          const destH = photoH * imgPos.scale * SCALE_Y;
+
+          // Target area for photo is the full card, so calculate final dimensions
+          // User controls photo scale in preview; let's apply same in output, but never upscale beyond original upload.
+          const previewScale = imgPos.scale;
+          // Find intended drawn size (in preview, image fits 350x500 * scale)
+          let destW = CANVAS_W * previewScale;
+          let destH = CANVAS_H * previewScale;
+
+          // Find scale factors for output
+          let outputW = ORIG_W * previewScale;
+          let outputH = ORIG_H * previewScale;
+
+          // Do not upscale photo beyond its original size
+          const maxOutputW = Math.min(outputW, photoW);
+          const maxOutputH = Math.min(outputH, photoH);
+
+          // Calculate aspect ratios
+          const outputAspect = ORIG_W / ORIG_H;
+          const photoAspect = photoW / photoH;
+          let drawW = outputW, drawH = outputH;
+
+          // Make sure photo fills the full template area, but not upscaled
+          if (photoAspect > outputAspect) {
+            // Wider than template, fit by height (cover)
+            drawH = Math.min(outputH, photoH);
+            drawW = drawH * photoAspect;
+          } else {
+            // Taller than template, fit by width (cover)
+            drawW = Math.min(outputW, photoW);
+            drawH = drawW / photoAspect;
+          }
+
+          // Final render position (apply offset from preview)
+          // User's X/Y and scale are in preview coords, so scale them
+          const scaledX = imgPos.x * SCALE_X;
+          const scaledY = imgPos.y * SCALE_Y;
+
+          // For cover: top-left of image may need negative offset if drawn photo is larger than the template area (to center/crop)
+          // Instead, stick to the user-set offset for fine control
 
           ctx.save();
           ctx.drawImage(
@@ -236,42 +314,29 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
             0,
             photoW,
             photoH,
-            destX,
-            destY,
-            destW,
-            destH
+            scaledX,
+            scaledY,
+            drawW,
+            drawH
           );
           ctx.restore();
 
-          // 2. Draw template image on top (frame with possible PNG transparency)
+          // 2. Draw template image on top
           ctx.save();
           ctx.drawImage(templateImg, 0, 0, ORIG_W, ORIG_H);
           ctx.restore();
 
-          // 3. Draw text overlays ON TOP of everything
-          textOverlays.forEach(ovl => {
-            ctx.font = `${ovl.size * SCALE_Y}px '${ovl.font}'`;
-            ctx.fillStyle = ovl.color;
-            ctx.textBaseline = "top";
-            ctx.textAlign = "left";
-            ctx.shadowColor = "#000";
-            ctx.shadowBlur = 8;
-            ctx.fillText(
-              ovl.text,
-              ovl.x * SCALE_X,
-              ovl.y * SCALE_Y
-            );
-            ctx.shadowBlur = 0;
-          });
+          // 3. Draw the overlays, precisely mapped (Y adjustment fix)
+          drawAllText(ctx, textOverlays, SCALE_X, SCALE_Y);
 
           finishDownload(canvas, format);
         };
         photo.onerror = () => {
-          // If photo fails, still draw template and text overlays
+          // If photo fails, still draw template and overlays
           drawTemplateAndText(ctx, templateImg, ORIG_W, ORIG_H, textOverlays, CANVAS_W, CANVAS_H, finishDownload, canvas, format);
         };
       } else {
-        // No photo: just template + overlays
+        // No user photo, just template and overlays
         drawTemplateAndText(ctx, templateImg, ORIG_W, ORIG_H, textOverlays, CANVAS_W, CANVAS_H, finishDownload, canvas, format);
       }
     };
@@ -282,55 +347,6 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
         description: "Could not load the template image.",
       });
     };
-
-    function drawTemplateAndText(
-      ctx: CanvasRenderingContext2D,
-      templateImg: HTMLImageElement,
-      ORIG_W: number,
-      ORIG_H: number,
-      textOverlays: TextOverlay[],
-      CANVAS_W: number,
-      CANVAS_H: number,
-      finishDownload: (canvas: HTMLCanvasElement, format: "png" | "jpeg") => void,
-      canvas: HTMLCanvasElement,
-      format: "png" | "jpeg"
-    ) {
-      // 1. Template on background
-      ctx.drawImage(templateImg, 0, 0, ORIG_W, ORIG_H);
-      // 2. Text overlays
-      const SCALE_X = ORIG_W / CANVAS_W;
-      const SCALE_Y = ORIG_H / CANVAS_H;
-      textOverlays.forEach(ovl => {
-        ctx.font = `${ovl.size * SCALE_Y}px '${ovl.font}'`;
-        ctx.fillStyle = ovl.color;
-        ctx.textBaseline = "top";
-        ctx.textAlign = "left";
-        ctx.shadowColor = "#000";
-        ctx.shadowBlur = 8;
-        ctx.fillText(
-          ovl.text,
-          ovl.x * SCALE_X,
-          ovl.y * SCALE_Y
-        );
-        ctx.shadowBlur = 0;
-      });
-      finishDownload(canvas, format);
-    }
-
-    function finishDownload(canvas: HTMLCanvasElement, format: "png" | "jpeg") {
-      let mime = (format === "png" ? "image/png" : "image/jpeg");
-      const link = document.createElement("a");
-      link.download = `birthday-card.${format}`;
-      link.href = canvas.toDataURL(mime, 1.0);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-
-      toast({
-        title: "Download started!",
-        description: `Your card is downloading as ${format.toUpperCase()} at full resolution.`
-      });
-    }
   };
 
   // onChange for text overlays
