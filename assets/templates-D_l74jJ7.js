@@ -1,0 +1,1 @@
+const e=[{id:"template1",name:"Bluey",img:"Template-1-SBV-BG-BlueTheme.png"},{id:"template2",name:"Green Flora",img:"Template-2-USJ-BG-FloraTheme.png"},{id:"template3",name:"Orange Blossoms",img:"orange-blossoms.jpg"},{id:"template4",name:"Living Room",img:"living-room.jpg"}];export{e as default};
