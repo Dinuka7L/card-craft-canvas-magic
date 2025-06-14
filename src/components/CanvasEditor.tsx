@@ -38,8 +38,8 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const canvasContainerRef = useRef<HTMLDivElement | null>(null);
   const [profileImg, setProfileImg] = useState<string | null>(null);
-  const [imgPos, setImgPos] = useState({ x: 85, y: 85, scale: 1 });
-  const [imgInit, setImgInit] = useState({ x: 85, y: 85, scale: 1 }); // for reset
+  const [imgPos, setImgPos] = useState({ x: 0, y: 0, scale: 1 });
+  const [imgInit, setImgInit] = useState({ x: 0, y: 0, scale: 1 }); // for reset
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [textOverlays, setTextOverlays] = useState<TextOverlay[]>([
@@ -136,8 +136,9 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
     const reader = new FileReader();
     reader.onload = e2 => {
       setProfileImg(e2.target?.result as string);
-      setImgPos({ x: 85, y: 85, scale: 1 });
-      setImgInit({ x: 85, y: 85, scale: 1 });
+      // Reset position/scale so the image fills the canvas at scale 1
+      setImgPos({ x: 0, y: 0, scale: 1 });
+      setImgInit({ x: 0, y: 0, scale: 1 });
     };
     reader.readAsDataURL(file);
     toast({ title: "Profile image loaded!", description: "Drag to position." });
@@ -192,32 +193,59 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
       const ORIG_W = templateImg.naturalWidth || templateImg.width;
       const ORIG_H = templateImg.naturalHeight || templateImg.height;
 
-      // Calculate scaling factors between preview and real size
-      const SCALE_X = ORIG_W / 350;
-      const SCALE_Y = ORIG_H / 500;
+      // Download: 3 layers —
+      // 1. User photo fills the canvas, movable/scalable, preserving aspect, not cropped to square
+      // 2. Template image fully covers card (PNG transparency supported)
+      // 3. Text overlays above template
 
       const canvas = document.createElement("canvas");
       canvas.width = ORIG_W;
       canvas.height = ORIG_H;
       const ctx = canvas.getContext("2d")!;
 
-      // 1. Draw the template/base image at full-res (as background)
-      ctx.drawImage(templateImg, 0, 0, ORIG_W, ORIG_H);
-
-      // 2. Draw the uploaded profile photo, scaled + positioned for hi-res
+      // 1. Draw uploaded photo if any, fitted/moved by user
       if (profileImg) {
         const photo = new window.Image();
         photo.crossOrigin = "anonymous";
         photo.src = profileImg;
         photo.onload = () => {
+          // Compute the display width/height of photo
+          const photoW = photo.naturalWidth;
+          const photoH = photo.naturalHeight;
+          // User controls scale (zoom), and (x, y) offset in output coordinates
+          // All imgPos values are as a fraction of preview canvas,
+          // so we scale accordingly to hi-res output
+          // The x/y are relative to the destination canvas
+          // Scale factors for position/size: user sees 350x500, but full size is ORIG_W x ORIG_H
+          const SCALE_X = ORIG_W / CANVAS_W;
+          const SCALE_Y = ORIG_H / CANVAS_H;
+          // Place the photo
+          const dispW = photoW * imgPos.scale * (ORIG_W/photoW); // in real output, scale for hi-res
+          const dispH = photoH * imgPos.scale * (ORIG_H/photoH);
+          // But for user sanity, match canvas units (positions are in "card" coords)
+          // Map user's preview move/zoom to hi-res output
+          const destX = imgPos.x * SCALE_X;
+          const destY = imgPos.y * SCALE_Y;
+          const destW = photoW * imgPos.scale * SCALE_X;
+          const destH = photoH * imgPos.scale * SCALE_Y;
+
           ctx.save();
           ctx.drawImage(
             photo,
-            imgPos.x * SCALE_X,
-            imgPos.y * SCALE_Y,
-            150 * imgPos.scale * SCALE_X,
-            150 * imgPos.scale * SCALE_Y
+            0,
+            0,
+            photoW,
+            photoH,
+            destX,
+            destY,
+            destW,
+            destH
           );
+          ctx.restore();
+
+          // 2. Draw template image on top (frame with possible PNG transparency)
+          ctx.save();
+          ctx.drawImage(templateImg, 0, 0, ORIG_W, ORIG_H);
           ctx.restore();
 
           // 3. Draw text overlays ON TOP of everything
@@ -226,7 +254,6 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
             ctx.fillStyle = ovl.color;
             ctx.textBaseline = "top";
             ctx.textAlign = "left";
-            // Add shadow for legibility
             ctx.shadowColor = "#000";
             ctx.shadowBlur = 8;
             ctx.fillText(
@@ -240,12 +267,12 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
           finishDownload(canvas, format);
         };
         photo.onerror = () => {
-          // If photo fails: draw just template and text overlays
-          drawTextOnly(ctx, SCALE_X, SCALE_Y, canvas, format);
+          // If photo fails, still draw template and text overlays
+          drawTemplateAndText(ctx, templateImg, ORIG_W, ORIG_H, textOverlays, CANVAS_W, CANVAS_H, finishDownload, canvas, format);
         };
       } else {
-        // No photo, only template + text overlays
-        drawTextOnly(ctx, SCALE_X, SCALE_Y, canvas, format);
+        // No photo: just template + overlays
+        drawTemplateAndText(ctx, templateImg, ORIG_W, ORIG_H, textOverlays, CANVAS_W, CANVAS_H, finishDownload, canvas, format);
       }
     };
 
@@ -256,13 +283,23 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
       });
     };
 
-    function drawTextOnly(
+    function drawTemplateAndText(
       ctx: CanvasRenderingContext2D,
-      SCALE_X: number,
-      SCALE_Y: number,
+      templateImg: HTMLImageElement,
+      ORIG_W: number,
+      ORIG_H: number,
+      textOverlays: TextOverlay[],
+      CANVAS_W: number,
+      CANVAS_H: number,
+      finishDownload: (canvas: HTMLCanvasElement, format: "png" | "jpeg") => void,
       canvas: HTMLCanvasElement,
       format: "png" | "jpeg"
     ) {
+      // 1. Template on background
+      ctx.drawImage(templateImg, 0, 0, ORIG_W, ORIG_H);
+      // 2. Text overlays
+      const SCALE_X = ORIG_W / CANVAS_W;
+      const SCALE_Y = ORIG_H / CANVAS_H;
       textOverlays.forEach(ovl => {
         ctx.font = `${ovl.size * SCALE_Y}px '${ovl.font}'`;
         ctx.fillStyle = ovl.color;
@@ -398,38 +435,41 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
           background: "#fff",
           boxShadow: "0 4px 24px 0 #0002",
           minWidth: CANVAS_W,
+          // No overflow: hidden. Let overlays & input pointer-events work.
         }}
       >
-        {/* Uploaded photo: now behind template and overlays! */}
+        {/* --- Render stack order: Uploaded photo (bottom, can move/scale) -> Template image (middle, always on top of photo) -> Text overlays (top, positioned absolutely) --- */}
+        {/* 1. Uploaded photo bottom layer */}
         {profileImg && (
-          <div
+          <img
+            src={profileImg}
+            alt="Profile"
+            draggable={false}
             className="absolute"
             style={{
               left: imgPos.x,
               top: imgPos.y,
-              width: 150 * imgPos.scale,
-              height: 150 * imgPos.scale,
-              cursor: dragMode === "move" ? "grabbing" : "grab",
-              borderRadius: 12,
-              overflow: "hidden",
-              boxShadow: "0 3px 12px #0005",
-              zIndex: 1, // lower z-index
-              transition: "box-shadow .2s"
+              width: `calc(100% * ${imgPos.scale})`,
+              height: `calc(100% * ${imgPos.scale})`,
+              objectFit: "cover",
+              pointerEvents: "auto",
+              userSelect: "none",
+              zIndex: 1,
+              borderRadius: 0
             }}
             onMouseDown={handleImgMouseDown}
             onTouchStart={handleImgTouchStart}
-            title="Drag to reposition"
-          >
-            <img
-              src={profileImg}
-              className="w-full h-full object-cover select-none"
-              alt='Profile'
-              draggable={false}
-              style={{ userSelect: "none", pointerEvents: "none" }}
-            />
-          </div>
+            title="Drag to reposition (Photo behind card)"
+          />
         )}
-        {/* Text overlays */}
+        {/* 2. Template image (middle layer, always covers photo) */}
+        <img
+          src={templateImg}
+          className="absolute inset-0 w-full h-full object-cover rounded-2xl pointer-events-none"
+          alt="Template"
+          style={{ zIndex: 2 }}
+        />
+        {/* 3. Text overlays (top layer, absolutely positioned) */}
         {textOverlays.map(ovl => (
           <span
             key={ovl.id}
@@ -497,7 +537,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
               textShadow: "0 2px 10px #0005",
               cursor: "move",
               userSelect: "none",
-              zIndex: 2, // overlays above photo, below template
+              zIndex: 3, // overlays above photo and template
               padding: "4px 8px"
             }}
             className={`rounded transition duration-150 ${selectedTextId === ovl.id ? "bg-white/80 shadow" : ""}`}
@@ -505,13 +545,6 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
             {ovl.text}
           </span>
         ))}
-        {/* Template on top as frame */}
-        <img
-          src={templateImg}
-          className="absolute inset-0 w-full h-full object-cover rounded-2xl pointer-events-none"
-          alt="Template"
-          style={{ zIndex: 3 }}
-        />
       </div>
     </div>
   );
