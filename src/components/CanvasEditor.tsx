@@ -1,4 +1,3 @@
-
 import React, { useRef, useState, useEffect } from "react";
 import { toast } from "@/hooks/use-toast";
 import { Image as ImageIcon } from "lucide-react";
@@ -63,6 +62,16 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
       y: e.clientY - imgPos.y,
     });
   };
+  const handleImgTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    setDragMode("move");
+    setIsDragging(true);
+    setDragStart({
+      x: touch.clientX - imgPos.x,
+      y: touch.clientY - imgPos.y,
+    });
+  };
   const handleMouseUp = () => {
     setDragMode("none");
     setIsDragging(false);
@@ -75,14 +84,33 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
       y: e.clientY - dragStart.y,
     }));
   };
+  const handleTouchMove = (e: TouchEvent) => {
+    if (dragMode !== "move" || !isDragging || !dragStart) return;
+    if (e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    setImgPos(pos => ({
+      ...pos,
+      x: touch.clientX - dragStart.x,
+      y: touch.clientY - dragStart.y,
+    }));
+  };
+  const handleTouchEnd = () => {
+    setDragMode("none");
+    setIsDragging(false);
+  };
 
   useEffect(() => {
-    if (isDragging)
+    if (isDragging) {
       window.addEventListener("mousemove", handleMouseMove);
+      window.addEventListener("touchmove", handleTouchMove);
+    }
     window.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("touchend", handleTouchEnd);
     return () => {
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("touchmove", handleTouchMove);
+      window.removeEventListener("touchend", handleTouchEnd);
     };
     // eslint-disable-next-line
   }, [isDragging, dragMode, dragStart]);
@@ -153,14 +181,6 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
         img.src = profileImg;
         img.onload = () => {
           ctx.save();
-          ctx.beginPath();
-          ctx.arc(
-            imgPos.x + 75 * imgPos.scale,
-            imgPos.y + 75 * imgPos.scale,
-            75 * imgPos.scale, 0, 2 * Math.PI
-          );
-          ctx.closePath();
-          ctx.clip();
           ctx.drawImage(
             img,
             imgPos.x,
@@ -309,13 +329,14 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
               width: 150 * imgPos.scale,
               height: 150 * imgPos.scale,
               cursor: dragMode === "move" ? "grabbing" : "grab",
-              borderRadius: "50%",
+              borderRadius: 12, // small rounding optional, or 0
               overflow: "hidden",
               boxShadow: "0 3px 12px #0005",
               zIndex: 2,
               transition: "box-shadow .2s"
             }}
             onMouseDown={handleImgMouseDown}
+            onTouchStart={handleImgTouchStart}
             title="Drag to reposition"
           >
             <img
@@ -356,6 +377,34 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
               window.addEventListener("mousemove", onMove);
               window.addEventListener("mouseup", onUp);
             }}
+            onTouchStart={e => {
+              setSelectedTextId(ovl.id);
+              if (e.touches.length !== 1) return;
+              const touch = e.touches[0];
+              const startX = touch.clientX,
+                startY = touch.clientY;
+              const idx = textOverlays.findIndex(t => t.id === ovl.id);
+              const orig = { x: textOverlays[idx].x, y: textOverlays[idx].y };
+              const onMove = (ev: TouchEvent) => {
+                if (ev.touches.length !== 1) return;
+                const t = ev.touches[0];
+                const dx = t.clientX - startX;
+                const dy = t.clientY - startY;
+                setTextOverlays(ovlArr =>
+                  ovlArr.map(txt =>
+                    txt.id === ovl.id
+                      ? { ...txt, x: orig.x + dx, y: orig.y + dy }
+                      : txt
+                  )
+                );
+              };
+              const onUp = () => {
+                window.removeEventListener("touchmove", onMove);
+                window.removeEventListener("touchend", onUp);
+              };
+              window.addEventListener("touchmove", onMove);
+              window.addEventListener("touchend", onUp);
+            }}
             style={{
               position: "absolute",
               left: ovl.x,
@@ -379,4 +428,3 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
     </div>
   );
 };
-
