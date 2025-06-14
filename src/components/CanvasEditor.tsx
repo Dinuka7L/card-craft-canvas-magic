@@ -185,7 +185,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
       return;
     }
 
-    // Load template at native resolution
+    // Load template at native resolution first
     const templateImg = new window.Image();
     templateImg.crossOrigin = "anonymous";
     templateImg.src = templateSrc;
@@ -200,15 +200,14 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
       canvas.height = ORIG_H;
       const ctx = canvas.getContext("2d")!;
 
-      // Helper for drawing overlays
+      // Helper to draw all overlays
       function drawAllTextOverlay(ctx: CanvasRenderingContext2D) {
         textOverlays.forEach(ovl => {
-          // All overlay positions/sizes are relative to CANVAS_W/H (preview size)
-          // Need to translate to PROPORTIONAL coordinates (normalized to 0...1)
-          const xRel = ovl.x / CANVAS_W;
-          const yRel = ovl.y / CANVAS_H;
-          // Font size as a ratio of preview height, so it's DPI-agnostic
-          const fontSizePx = (ovl.size / CANVAS_H) * ORIG_H;
+          // All overlay positions/sizes are relative to preview CANVAS_W/CANVAS_H
+          // To export, always use relative fractions!
+          const relX = ovl.x / CANVAS_W;
+          const relY = ovl.y / CANVAS_H;
+          const fontSizePx = ovl.size / CANVAS_H * ORIG_H;
           ctx.save();
           ctx.font = `bold ${fontSizePx}px '${ovl.font}', sans-serif`;
           ctx.fillStyle = ovl.color;
@@ -218,80 +217,82 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
           ctx.shadowBlur = 8;
           ctx.fillText(
             ovl.text,
-            xRel * ORIG_W,
-            yRel * ORIG_H
+            relX * ORIG_W,
+            relY * ORIG_H
           );
           ctx.shadowBlur = 0;
           ctx.restore();
         });
       }
 
-      // When all is ready, do photo → template → overlay
       function finishExport() {
-        // 1. Draw uploaded photo if any
+        // Draw user photo at *centered* position and scaled, using fractions!
+        // This matches the math in the "example" provided:
+        // - Center = (imgPos.x + 0.5*CANVAS_W, imgPos.y + 0.5*CANVAS_H), all in preview
+        // - Scale acts as a "zoom", stretches around the center point
+
         if (profileImg) {
           const photo = new window.Image();
           photo.crossOrigin = "anonymous";
           photo.src = profileImg;
 
           photo.onload = () => {
-            // NEW math: work in proportional units
-            // Compute the center x/y as a percentage of preview size
-            // Original preview: width = CANVAS_W, height = CANVAS_H
-            // imgPos.x, imgPos.y are TOP-LEFT offsets in preview pixels
-            // Scaling is imgPos.scale (applies to both x and y).
-            // Export: want to draw it at the SAME proportional place and scale!
+            // Fractional center point in preview [0..1]
+            const centerX = (imgPos.x + CANVAS_W / 2) / CANVAS_W;
+            const centerY = (imgPos.y + CANVAS_H / 2) / CANVAS_H;
 
-            // The image in preview is drawn at (imgPos.x, imgPos.y), width/height (100% * imgPos.scale)
-            // But for proper export, we'll use the center approach (like in your example):
-            const scaledW = photo.naturalWidth * imgPos.scale * (ORIG_W / CANVAS_W);
-            const scaledH = photo.naturalHeight * imgPos.scale * (ORIG_H / CANVAS_H);
+            // Exact center in *export* canvas px
+            const px = centerX * ORIG_W;
+            const py = centerY * ORIG_H;
 
-            // Instead of using naturalWidth/Height (which may be vastly different than preview), let's cover the same area as in preview:
-            // Option 1: simulate what happens in preview DOM
-            // The <img> in preview gets stretched to width=CANVAS_W*imgPos.scale, height=CANVAS_H*imgPos.scale, at left/top = imgPos.x/imgPos.y
-            // So EFFECTIVELY: export position = (imgPos.x/previewW * ORIG_W), size = ORIG_W*imgPos.scale, etc.
-
-            const exportX = imgPos.x / CANVAS_W * ORIG_W;
-            const exportY = imgPos.y / CANVAS_H * ORIG_H;
+            // "Unscaled" photo dimension at export size
             const exportW = ORIG_W * imgPos.scale;
             const exportH = ORIG_H * imgPos.scale;
 
+            // For correct aspect ratio, we want to cover the area by cropping the photo)
+            // To mimic the preview:
+            // - Resize the photo so that it fills the card (template)
+            // - The width and height used for drawing depend on imgPos.scale
+            // - Draw the user photo so that its center aligns with [px, py]
+            // - Place with top-left at (px - exportW / 2, py - exportH / 2)
+
             ctx.save();
+            ctx.translate(px - exportW / 2, py - exportH / 2);
             ctx.drawImage(
               photo,
-              0, 0, photo.naturalWidth, photo.naturalHeight,
-              exportX, exportY,
-              exportW, exportH
+              0,
+              0,
+              photo.naturalWidth,
+              photo.naturalHeight,
+              0,
+              0,
+              exportW,
+              exportH
             );
             ctx.restore();
 
-            // 2. Draw template over photo (always fills canvas)
+            // Draw template on top
             ctx.drawImage(templateImg, 0, 0, ORIG_W, ORIG_H);
 
-            // 3. Draw overlays in correct relative units
+            // Draw overlays
             drawAllTextOverlay(ctx);
 
-            // Finish!
+            // Download
             downloadExported(canvas, format);
           };
-
           photo.onerror = () => {
-            // Just draw template + overlays if photo failed
             ctx.drawImage(templateImg, 0, 0, ORIG_W, ORIG_H);
             drawAllTextOverlay(ctx);
             downloadExported(canvas, format);
           };
-
         } else {
-          // No photo: template + overlay
+          // Only template and overlays
           ctx.drawImage(templateImg, 0, 0, ORIG_W, ORIG_H);
           drawAllTextOverlay(ctx);
           downloadExported(canvas, format);
         }
       }
 
-      // New helper
       function downloadExported(canvas: HTMLCanvasElement, format: "png" | "jpeg") {
         let dataUrl: string;
         if (format === "jpeg") {
@@ -308,7 +309,6 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
         toast({ title: "Image downloaded!", description: `Saved as ${a.download}` });
       }
 
-      // Go!
       finishExport();
     };
 
