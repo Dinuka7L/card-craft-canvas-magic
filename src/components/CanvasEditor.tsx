@@ -1,4 +1,3 @@
-
 import React, { useRef, useState, useEffect } from "react";
 import { toast } from "@/hooks/use-toast";
 import { Image as ImageIcon } from "lucide-react";
@@ -106,7 +105,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
     setImgPos(pos => ({
       ...pos,
       x: touch.clientX - dragStart.x,
-      y: touch.clientY - dragStart.y,
+      y: touch.clientY - imgPos.y,
     }));
   };
   const handleTouchEnd = () => {
@@ -186,23 +185,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
       return;
     }
 
-    // --- HERE is the missing function!
-    function finishDownload(canvas: HTMLCanvasElement, format: "png" | "jpeg") {
-      let dataUrl: string;
-      if (format === "jpeg") {
-        dataUrl = canvas.toDataURL("image/jpeg", 0.95);
-      } else {
-        dataUrl = canvas.toDataURL("image/png");
-      }
-      const a = document.createElement("a");
-      a.href = dataUrl;
-      a.download = `birthday-card.${format}`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      toast({ title: "Image downloaded!", description: `Saved as ${a.download}` });
-    }
-
+    // Load template at native resolution
     const templateImg = new window.Image();
     templateImg.crossOrigin = "anonymous";
     templateImg.src = templateSrc;
@@ -211,112 +194,128 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
       const ORIG_W = templateImg.naturalWidth || templateImg.width;
       const ORIG_H = templateImg.naturalHeight || templateImg.height;
 
-      // Use the preview canvas as the layout guide
-      const SCALE_X = ORIG_W / CANVAS_W;
-      const SCALE_Y = ORIG_H / CANVAS_H;
-
+      // Final export canvas matches template's native size
       const canvas = document.createElement("canvas");
       canvas.width = ORIG_W;
       canvas.height = ORIG_H;
       const ctx = canvas.getContext("2d")!;
 
-      // Draw uploaded photo, placed(scaled) as in preview, but scaled up
-      if (profileImg) {
-        const photo = new window.Image();
-        photo.crossOrigin = "anonymous";
-        photo.src = profileImg;
-        photo.onload = () => {
-          // The "photo" <img> in preview is styled:
-          // left: imgPos.x, top: imgPos.y, width/height: 100% * imgPos.scale, 
-          // in a container of CANVAS_W x CANVAS_H
-          // So, in original canvas, photo should be drawn at:
-          //  x: imgPos.x * SCALE_X, y: imgPos.y * SCALE_Y
-          //  width: CANVAS_W * imgPos.scale * SCALE_X = ORIG_W * imgPos.scale
-          //  height: CANVAS_H * imgPos.scale * SCALE_Y = ORIG_H * imgPos.scale
-          // HOWEVER, to maintain aspect-ratio cover: use same logic as the live DOM
-          const PREVIEW_CONTAINER_RATIO = CANVAS_W / CANVAS_H;
-          const PHOTO_RATIO = photo.naturalWidth / photo.naturalHeight;
-          let drawW = ORIG_W * imgPos.scale;
-          let drawH = ORIG_H * imgPos.scale;
-
-          // Use the DOM logic: "cover" fit. Center, may bleed over
-          // but use top-left as (imgPos.x * SCALE_X, imgPos.y * SCALE_Y)
-          // So we match the live JS logic:
-          // In DOM: photo is stretched to [CANVAS_W * scale, CANVAS_H * scale], then offset by (imgPos.x, imgPos.y)
-          // We do the same!
-
+      // Helper for drawing overlays
+      function drawAllTextOverlay(ctx: CanvasRenderingContext2D) {
+        textOverlays.forEach(ovl => {
+          // All overlay positions/sizes are relative to CANVAS_W/H (preview size)
+          // Need to translate to PROPORTIONAL coordinates (normalized to 0...1)
+          const xRel = ovl.x / CANVAS_W;
+          const yRel = ovl.y / CANVAS_H;
+          // Font size as a ratio of preview height, so it's DPI-agnostic
+          const fontSizePx = (ovl.size / CANVAS_H) * ORIG_H;
           ctx.save();
-          ctx.drawImage(
-            photo,
-            0,
-            0,
-            photo.naturalWidth,
-            photo.naturalHeight,
-            imgPos.x * SCALE_X,
-            imgPos.y * SCALE_Y,
-            ORIG_W * imgPos.scale,
-            ORIG_H * imgPos.scale
+          ctx.font = `bold ${fontSizePx}px '${ovl.font}', sans-serif`;
+          ctx.fillStyle = ovl.color;
+          ctx.textBaseline = "top";
+          ctx.textAlign = "left";
+          ctx.shadowColor = "#000";
+          ctx.shadowBlur = 8;
+          ctx.fillText(
+            ovl.text,
+            xRel * ORIG_W,
+            yRel * ORIG_H
           );
+          ctx.shadowBlur = 0;
           ctx.restore();
-
-          // Overlay template and text
-          drawTemplateAndText(ctx, templateImg, ORIG_W, ORIG_H, textOverlays, SCALE_X, SCALE_Y, finishDownload, canvas, format);
-        };
-        photo.onerror = () => {
-          // If loading user photo fails, just draw template/text
-          drawTemplateAndText(ctx, templateImg, ORIG_W, ORIG_H, textOverlays, SCALE_X, SCALE_Y, finishDownload, canvas, format);
-        };
-      } else {
-        // No user photo, just template and overlays
-        drawTemplateAndText(ctx, templateImg, ORIG_W, ORIG_H, textOverlays, SCALE_X, SCALE_Y, finishDownload, canvas, format);
+        });
       }
+
+      // When all is ready, do photo → template → overlay
+      function finishExport() {
+        // 1. Draw uploaded photo if any
+        if (profileImg) {
+          const photo = new window.Image();
+          photo.crossOrigin = "anonymous";
+          photo.src = profileImg;
+
+          photo.onload = () => {
+            // NEW math: work in proportional units
+            // Compute the center x/y as a percentage of preview size
+            // Original preview: width = CANVAS_W, height = CANVAS_H
+            // imgPos.x, imgPos.y are TOP-LEFT offsets in preview pixels
+            // Scaling is imgPos.scale (applies to both x and y).
+            // Export: want to draw it at the SAME proportional place and scale!
+
+            // The image in preview is drawn at (imgPos.x, imgPos.y), width/height (100% * imgPos.scale)
+            // But for proper export, we'll use the center approach (like in your example):
+            const scaledW = photo.naturalWidth * imgPos.scale * (ORIG_W / CANVAS_W);
+            const scaledH = photo.naturalHeight * imgPos.scale * (ORIG_H / CANVAS_H);
+
+            // Instead of using naturalWidth/Height (which may be vastly different than preview), let's cover the same area as in preview:
+            // Option 1: simulate what happens in preview DOM
+            // The <img> in preview gets stretched to width=CANVAS_W*imgPos.scale, height=CANVAS_H*imgPos.scale, at left/top = imgPos.x/imgPos.y
+            // So EFFECTIVELY: export position = (imgPos.x/previewW * ORIG_W), size = ORIG_W*imgPos.scale, etc.
+
+            const exportX = imgPos.x / CANVAS_W * ORIG_W;
+            const exportY = imgPos.y / CANVAS_H * ORIG_H;
+            const exportW = ORIG_W * imgPos.scale;
+            const exportH = ORIG_H * imgPos.scale;
+
+            ctx.save();
+            ctx.drawImage(
+              photo,
+              0, 0, photo.naturalWidth, photo.naturalHeight,
+              exportX, exportY,
+              exportW, exportH
+            );
+            ctx.restore();
+
+            // 2. Draw template over photo (always fills canvas)
+            ctx.drawImage(templateImg, 0, 0, ORIG_W, ORIG_H);
+
+            // 3. Draw overlays in correct relative units
+            drawAllTextOverlay(ctx);
+
+            // Finish!
+            downloadExported(canvas, format);
+          };
+
+          photo.onerror = () => {
+            // Just draw template + overlays if photo failed
+            ctx.drawImage(templateImg, 0, 0, ORIG_W, ORIG_H);
+            drawAllTextOverlay(ctx);
+            downloadExported(canvas, format);
+          };
+
+        } else {
+          // No photo: template + overlay
+          ctx.drawImage(templateImg, 0, 0, ORIG_W, ORIG_H);
+          drawAllTextOverlay(ctx);
+          downloadExported(canvas, format);
+        }
+      }
+
+      // New helper
+      function downloadExported(canvas: HTMLCanvasElement, format: "png" | "jpeg") {
+        let dataUrl: string;
+        if (format === "jpeg") {
+          dataUrl = canvas.toDataURL("image/jpeg", 0.95);
+        } else {
+          dataUrl = canvas.toDataURL("image/png");
+        }
+        const a = document.createElement("a");
+        a.href = dataUrl;
+        a.download = `birthday-card.${format}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        toast({ title: "Image downloaded!", description: `Saved as ${a.download}` });
+      }
+
+      // Go!
+      finishExport();
     };
 
     templateImg.onerror = () => {
       toast({ title: "Download failed", description: "Could not load the template image." });
     };
   };
-
-  // Updated helper: draw template + overlays on top of current photo layer
-  function drawTemplateAndText(
-    ctx: CanvasRenderingContext2D,
-    templateImg: HTMLImageElement,
-    ORIG_W: number,
-    ORIG_H: number,
-    textOverlays: TextOverlay[],
-    SCALE_X: number,
-    SCALE_Y: number,
-    finishDownload: (canvas: HTMLCanvasElement, format: "png" | "jpeg") => void,
-    canvas: HTMLCanvasElement,
-    format: "png" | "jpeg"
-  ) {
-    ctx.drawImage(templateImg, 0, 0, ORIG_W, ORIG_H);
-    drawAllText(ctx, textOverlays, SCALE_X, SCALE_Y);
-    finishDownload(canvas, format);
-  }
-
-  // Updated: Text positions, sizes, and fonts always scaled from DOM values via SCALE_X/Y
-  function drawAllText(
-    ctx: CanvasRenderingContext2D,
-    overlays: TextOverlay[],
-    scaleX: number,
-    scaleY: number
-  ) {
-    overlays.forEach(ovl => {
-      ctx.font = `${ovl.size * scaleY}px '${ovl.font}'`;
-      ctx.fillStyle = ovl.color;
-      ctx.textBaseline = "top";
-      ctx.textAlign = "left";
-      ctx.shadowColor = "#000";
-      ctx.shadowBlur = 8;
-      ctx.fillText(
-        ovl.text,
-        ovl.x * scaleX,
-        ovl.y * scaleY
-      );
-      ctx.shadowBlur = 0;
-    });
-  }
 
   // onChange for text overlays
   const onChangeTextOverlay = (id: string, patch: Partial<TextOverlay>) => {
