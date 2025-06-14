@@ -2,8 +2,6 @@ import React, { useRef, useEffect, useState } from "react";
 import { toast } from "@/hooks/use-toast";
 import { Image as ImageIcon } from "lucide-react";
 import { DownloadDropdown } from "./DownloadDropdown";
-import { ImageCropperControls } from "./ImageCropperControls";
-import { TextOverlayControls } from "./TextOverlayControls";
 import { Progress } from "./ui/progress";
 
 // ========== Load template image assets via Vite glob ==========
@@ -19,134 +17,160 @@ interface TemplateMeta {
   name: string;
   img: string;
 }
-export interface TextOverlay {
-  id: string;
-  text: string;
-  x: number; // fraction [0,1]
-  y: number; // fraction [0,1]
-  font: string;
-  color: string;
-  size: number; // fraction of card height, eg 0.06
-}
 interface CanvasEditorProps {
   templateId: string;
 }
+interface OverlayControlState {
+  text: string;
+  x: number; // [0,1]
+  y: number; // [0,1]
+  scale: number; // font-size scalar
+  color: string;
+}
 
 export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
-  // ----- Template meta -----
+  // -- Templates
   const [templates, setTemplates] = useState<TemplateMeta[]>([]);
   useEffect(() => {
     import("../templates/templates.json").then(json => {
       setTemplates(json.default ?? json);
     });
   }, []);
-  const selTpl = templates.find(tpl => tpl.id === templateId);
-  const templateImgName = selTpl?.img || "";
-  const templateImgUrl = imageMap[templateImgName] || "";
-
-  // ----- State: Template image -----
+  const templateMeta = templates.find(t => t.id === templateId);
+  const templateImgUrl = templateMeta ? imageMap[templateMeta.img] : "";
+  
+  // -- Template & User Images
+  const [tplImg, setTplImg] = useState<HTMLImageElement | null>(null);
   const [tplDims, setTplDims] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
-  const tplImgRef = useRef<HTMLImageElement | null>(null);
   useEffect(() => {
     if (!templateImgUrl) return;
     const img = new window.Image();
-    img.onload = () => setTplDims({ width: img.naturalWidth, height: img.naturalHeight });
+    img.onload = () => {
+      setTplImg(img);
+      setTplDims({ width: img.naturalWidth, height: img.naturalHeight });
+    };
     img.src = templateImgUrl;
-    tplImgRef.current = img;
   }, [templateImgUrl]);
 
-  // ----- State: User Photo -----
-  const [userImgUrl, setUserImgUrl] = useState<string | null>(null);
-  const userImgRef = useRef<HTMLImageElement | null>(null);
-  const [userImgDims, setUserImgDims] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
-  // photoPos: x/y = [0,1] fractions, scale=1 is photo's native height equals card's height
-  const [photoPos, setPhotoPos] = useState<{ x: number; y: number; scale: number }>({ x: 0.5, y: 0.5, scale: 1 });
+  const [photoImg, setPhotoImg] = useState<HTMLImageElement | null>(null);
+  const [photoDims, setPhotoDims] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
 
-  // Load user image data after upload/change
-  useEffect(() => {
-    if (!userImgUrl) {
-      setUserImgDims({ width: 0, height: 0 });
-      return;
-    }
-    const img = new window.Image();
-    img.onload = () =>
-      setUserImgDims({ width: img.naturalWidth, height: img.naturalHeight });
-    img.src = userImgUrl;
-    userImgRef.current = img;
-  }, [userImgUrl]);
+  // -- Controls
+  const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
+  const [photoX, setPhotoX] = useState(0.5);
+  const [photoY, setPhotoY] = useState(0.5);
+  const [photoScale, setPhotoScale] = useState(1);
 
-  // ----- State: Text overlays -----
-  const [textOverlays, setTextOverlays] = useState<TextOverlay[]>([
-    {
-      id: "main",
-      text: "Happy Birthday!",
-      x: 0.15,
-      y: 0.44,
-      font: "Playfair Display",
-      color: "#fff",
-      size: 0.064, // Height fraction, eg: 32/500 = 0.064
-    }
-  ]);
-  const [selectedTextId, setSelectedTextId] = useState<string>("main");
+  // Single text overlay (for simplicity, can extend to more layers if needed)
+  const [overlay, setOverlay] = useState<OverlayControlState>({
+    text: "Happy Birthday!",
+    x: 0.15,
+    y: 0.44,
+    scale: 1,
+    color: "#fff",
+  });
 
-  // ----- File picker ref (hidden input) -----
+  // Confirm/download buttons state
+  const [confirmed, setConfirmed] = useState(false);
+
+  // -- Canvas Ref
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  // -- File input ref
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ----- Controls -----
-  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // ===== PHOTO UPLOAD =====
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = e2 => {
-      setUserImgUrl(e2.target?.result as string);
-      setPhotoPos({ x: 0.5, y: 0.5, scale: 1 });
+    reader.onload = () => {
+      setPhotoDataUrl(reader.result as string);
     };
     reader.readAsDataURL(file);
-    toast({ title: "Photo uploaded!", description: "Adjust position and scale as needed." });
+    toast({ title: "Photo uploaded!", description: "Adjust and confirm when you're ready." });
+    setConfirmed(false);
+  };
+  // load image from photoDataUrl
+  useEffect(() => {
+    if (!photoDataUrl) {
+      setPhotoImg(null);
+      setPhotoDims({ width: 0, height: 0 });
+      return;
+    }
+    const img = new window.Image();
+    img.onload = () => {
+      setPhotoImg(img);
+      setPhotoDims({ width: img.naturalWidth, height: img.naturalHeight });
+    };
+    img.src = photoDataUrl;
+  }, [photoDataUrl]);
+
+  // ===== DRAW CANVAS (PREVIEW + DOWNLOAD) =====
+  const drawCanvas = (download?: boolean) => {
+    if (!tplImg || !tplDims.width) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    // Native resolution always for both preview and download:
+    canvas.width = tplDims.width;
+    canvas.height = tplDims.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // photo first under template
+    if (photoImg && photoDims.width && photoDims.height) {
+      const px = photoX * canvas.width - (photoDims.width * photoScale) / 2;
+      const py = photoY * canvas.height - (photoDims.height * photoScale) / 2;
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.scale(photoScale, photoScale);
+      ctx.drawImage(photoImg, 0, 0);
+      ctx.restore();
+    }
+    // template on top
+    ctx.drawImage(tplImg, 0, 0, canvas.width, canvas.height);
+
+    // text overlays
+    ctx.save();
+    const fontPx = 60 * overlay.scale; // editable base px * scale
+    ctx.font = `${fontPx}px Montserrat, Inter, Playfair Display, sans-serif`;
+    ctx.fillStyle = overlay.color;
+    ctx.textBaseline = "top";
+    const nx = overlay.x * canvas.width;
+    const ny = overlay.y * canvas.height;
+    ctx.shadowColor = "#000";
+    ctx.shadowBlur = 8;
+    ctx.fillText(overlay.text || "", nx, ny);
+    ctx.shadowBlur = 0;
+    ctx.restore();
   };
 
-  // -- Move/Scale photo --
-  const MIN_SCALE = 0.32, MAX_SCALE = 2.4;
-  const handlePhotoZoom = (delta: number) => {
-    setPhotoPos(p => ({
-      ...p,
-      scale: Math.max(MIN_SCALE, Math.min(MAX_SCALE, +(p.scale + delta).toFixed(3))),
-    }));
-  };
-  const handleResetPhoto = () => {
-    setPhotoPos({ x: 0.5, y: 0.5, scale: 1 });
-  };
+  // keep preview up-to-date
+  useEffect(() => {
+    drawCanvas();
+    // eslint-disable-next-line
+  }, [tplImg, tplDims, photoImg, photoDims, photoX, photoY, photoScale, overlay]);
 
-  // ---- Text Overlay controls ----
-  const handleAddText = () => {
-    const newId = "txt" + Math.random().toString(36).slice(2);
-    setTextOverlays(ovl => [
-      ...ovl,
-      {
-        id: newId,
-        text: "Write here",
-        x: 0.4,
-        y: 0.60,
-        font: "Inter",
-        color: "#222",
-        size: 0.048,
-      }
-    ]);
-    setSelectedTextId(newId);
-    toast({ title: "Added new text overlay!" });
-  };
+  // ============ UI ============
+  // Responsive preview (scale canvas to fit max bounds, preserve aspect)
+  const MAX_PREVW = 400, MAX_PREVH = 570;
+  const aspect = tplDims.width && tplDims.height ? tplDims.width / tplDims.height : 1;
+  let previewW = MAX_PREVW, previewH = MAX_PREVH;
+  if (tplDims.width && tplDims.height) {
+    const r = Math.min(MAX_PREVW / tplDims.width, MAX_PREVH / tplDims.height, 1);
+    previewW = Math.round(tplDims.width * r);
+    previewH = Math.round(tplDims.height * r);
+  }
 
-  // ---- Download baked canvas (JPEG or PNG) ----
-  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
+  // Download logic (download button)
   const handleDownload = (format: "png" | "jpeg") => {
-    if (!tplImgRef.current) {
+    if (!tplImg || !tplDims.width) {
       toast({ title: "Download failed", description: "Template not loaded" }); return;
     }
-    // bake the canvas at template's full resolution:
-    bakeCanvas(tplDims.width, tplDims.height, true);
-    // Extract image data and download
+    drawCanvas(true);
     setTimeout(() => {
-      const canvas = previewCanvasRef.current as HTMLCanvasElement;
+      const canvas = canvasRef.current as HTMLCanvasElement;
       if (!canvas) return;
       let dataUrl: string;
       if (format === "jpeg") {
@@ -161,294 +185,158 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
       a.click();
       document.body.removeChild(a);
       toast({ title: `Image downloaded!`, description: `Saved as ${a.download}` });
-      // After download, restore preview size
-      bakeCanvas();
-    }, 64); // allow canvas to render
+      drawCanvas(); // restore preview
+    }, 64);
   };
 
-  // ============================= Canvas Baking Logic =============================
-  // Smartly re-bake preview canvas at right size whenever anything relevant changes
-  // If called with no args, bakes as "preview": fits in 400x570 box with aspect preserved
-  const bakeCanvas = (
-    width?: number,
-    height?: number,
-    setSizeOnly?: boolean // warning: used during download to avoid extra resize->render
-  ) => {
-    // If no template image, nothing to draw!
-    if (!tplImgRef.current || !tplDims.width) return;
-    const tpl = tplImgRef.current;
-    // Find target size
-    let tw = width ?? tplDims.width;
-    let th = height ?? tplDims.height;
-    // For preview: shrink to fit preview box but keep aspect
-    const MAX_PREVW = 400, MAX_PREVH = 570;
-    if (!width || !height) {
-      const previewRatio = Math.min(MAX_PREVW / tplDims.width, MAX_PREVH / tplDims.height, 1);
-      tw = Math.round(tplDims.width * previewRatio);
-      th = Math.round(tplDims.height * previewRatio);
-    }
-    // Set canvas size
-    const canvas = previewCanvasRef.current;
-    if (!canvas) return;
-    canvas.width = tw;
-    canvas.height = th;
-    if (setSizeOnly) return; // for download: we "bake" layout and draw below
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // -- Draw photo --
-    if (userImgRef.current && userImgDims.width && userImgDims.height) {
-      const img = userImgRef.current;
-      // Map [0,1] position/scaling to canvas px:
-      // Scale math: photoScale is fraction of template height at tpl dims, but we may be previewing at tw/th
-      // See: example code from user
-      const px = photoPos.x * canvas.width - (img.width * photoPos.scale * (canvas.height / tplDims.height)) / 2;
-      const py = photoPos.y * canvas.height - (img.height * photoPos.scale * (canvas.height / tplDims.height)) / 2;
-      ctx.save();
-      ctx.translate(px, py);
-      // scale: adjust so photoScale = 1 means photo's native height = tplDims.height on canvas
-      const s = photoPos.scale * (canvas.height / tplDims.height);
-      ctx.scale(s, s);
-      ctx.drawImage(img, 0, 0);
-      ctx.restore();
-    }
-
-    // -- Draw template image on top --
-    ctx.drawImage(tpl, 0, 0, canvas.width, canvas.height);
-
-    // -- Draw all overlays --
-    textOverlays.forEach(ovl => {
-      ctx.save();
-      // font size: ovl.size is fraction of card height; at preview must scale accordingly
-      const fontPx = Math.round(ovl.size * canvas.height);
-      ctx.font = `bold ${fontPx}px '${ovl.font}', sans-serif`;
-      ctx.fillStyle = ovl.color;
-      ctx.textBaseline = "top";
-      ctx.textAlign = "left";
-      ctx.shadowColor = "#000";
-      ctx.shadowBlur = 8;
-      ctx.fillText(
-        ovl.text,
-        ovl.x * canvas.width,
-        ovl.y * canvas.height
-      );
-      ctx.shadowBlur = 0;
-      ctx.restore();
-    });
-  };
-
-  // Keep preview canvas synced LIVE
+  // Reset everything on template change
   useEffect(() => {
-    bakeCanvas();
-    // eslint-disable-next-line
-  }, [
-    tplDims.width, tplDims.height,
-    userImgUrl, userImgDims.width, userImgDims.height,
-    photoPos.x, photoPos.y, photoPos.scale,
-    JSON.stringify(textOverlays)
-  ]);
-
-  // Handle drag for photo move (fraction-prorated)
-  const dragging = useRef(false);
-  const dragStart = useRef<{ x0: number, y0: number, px0: number, py0: number }>();
-  const previewBoxRef = useRef<HTMLDivElement>(null);
-
-  const handlePhotoDown = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!tplDims.width || !tplDims.height) return;
-    let clientX, clientY;
-    if ("touches" in e) {
-      if (e.touches.length !== 1) return;
-      clientX = e.touches[0].clientX;
-      clientY = e.touches[0].clientY;
-    } else {
-      clientX = e.clientX; clientY = e.clientY;
-    }
-    const rect = previewBoxRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const previewWidth = previewCanvasRef.current?.width ?? 0;
-    const previewHeight = previewCanvasRef.current?.height ?? 0;
-    const px = clientX - rect.left;
-    const py = clientY - rect.top;
-    dragStart.current = { x0: photoPos.x, y0: photoPos.y, px0: px, py0: py };
-    dragging.current = true;
-    const move = (ev: MouseEvent | TouchEvent) => {
-      let cx, cy;
-      if ("touches" in ev) {
-        if (ev.touches.length !== 1) return;
-        cx = ev.touches[0].clientX - rect.left;
-        cy = ev.touches[0].clientY - rect.top;
-      } else {
-        cx = (ev as MouseEvent).clientX - rect.left;
-        cy = (ev as MouseEvent).clientY - rect.top;
-      }
-      const dx = (cx - dragStart.current!.px0) / previewWidth;
-      const dy = (cy - dragStart.current!.py0) / previewHeight;
-      setPhotoPos(p => ({
-        ...p,
-        x: Math.max(0, Math.min(1, dragStart.current!.x0 + dx)),
-        y: Math.max(0, Math.min(1, dragStart.current!.y0 + dy))
-      }));
-    };
-    const up = () => {
-      dragging.current = false;
-      window.removeEventListener("mousemove", move as any);
-      window.removeEventListener("touchmove", move as any);
-      window.removeEventListener("mouseup", up);
-      window.removeEventListener("touchend", up);
-    };
-    if ("touches" in e) {
-      window.addEventListener("touchmove", move as any);
-      window.addEventListener("touchend", up);
-    } else {
-      window.addEventListener("mousemove", move as any);
-      window.addEventListener("mouseup", up);
-    }
-  };
-
-  // -- Drag for text overlays --
-  const handleOverlayDown = (ovl: TextOverlay, e: React.MouseEvent | React.TouchEvent) => {
-    setSelectedTextId(ovl.id);
-    if (!tplDims.width || !tplDims.height) return;
-    let clientX, clientY;
-    if ("touches" in e) {
-      if (e.touches.length !== 1) return;
-      clientX = e.touches[0].clientX;
-      clientY = e.touches[0].clientY;
-    } else {
-      clientX = e.clientX; clientY = e.clientY;
-    }
-    const rect = previewBoxRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const previewWidth = previewCanvasRef.current?.width ?? 0;
-    const previewHeight = previewCanvasRef.current?.height ?? 0;
-    const px = clientX - rect.left;
-    const py = clientY - rect.top;
-    const ovlStartX = ovl.x;
-    const ovlStartY = ovl.y;
-    const move = (ev: MouseEvent | TouchEvent) => {
-      let cx, cy;
-      if ("touches" in ev) {
-        if (ev.touches.length !== 1) return;
-        cx = ev.touches[0].clientX - rect.left;
-        cy = ev.touches[0].clientY - rect.top;
-      } else {
-        cx = (ev as MouseEvent).clientX - rect.left;
-        cy = (ev as MouseEvent).clientY - rect.top;
-      }
-      const dx = (cx - px) / previewWidth;
-      const dy = (cy - py) / previewHeight;
-      setTextOverlays(arr =>
-        arr.map(txt =>
-          txt.id === ovl.id
-            ? { ...txt, x: Math.max(0, Math.min(1, ovlStartX + dx)), y: Math.max(0, Math.min(1, ovlStartY + dy)) }
-            : txt
-        )
-      );
-    };
-    const up = () => {
-      window.removeEventListener("mousemove", move as any);
-      window.removeEventListener("touchmove", move as any);
-      window.removeEventListener("mouseup", up);
-      window.removeEventListener("touchend", up);
-    };
-    if ("touches" in e) {
-      window.addEventListener("touchmove", move as any);
-      window.addEventListener("touchend", up);
-    } else {
-      window.addEventListener("mousemove", move as any);
-      window.addEventListener("mouseup", up);
-    }
-  };
-
-  // ======================== UI ===========================
-  // For preview, keep aspect ratio and fixed max size (like user's example)
-  const MAX_PREVIEW_W = 400, MAX_PREVIEW_H = 570;
-  const aspect = tplDims.width && tplDims.height ? tplDims.width / tplDims.height : 1;
-  let previewW = MAX_PREVIEW_W, previewH = MAX_PREVIEW_H;
-  if (tplDims.width && tplDims.height) {
-    const r = Math.min(MAX_PREVIEW_W / tplDims.width, MAX_PREVIEW_H / tplDims.height, 1);
-    previewW = Math.round(tplDims.width * r);
-    previewH = Math.round(tplDims.height * r);
-  }
+    setPhotoDataUrl(null);
+    setPhotoImg(null);
+    setConfirmed(false);
+    setOverlay({
+      text: "Happy Birthday!",
+      x: 0.15,
+      y: 0.44,
+      scale: 1,
+      color: "#fff",
+    });
+    setPhotoX(0.5);
+    setPhotoY(0.5);
+    setPhotoScale(1);
+  }, [templateId]);
 
   return (
     <div className="flex flex-col xl:flex-row gap-8 w-full max-w-full">
       {/* Left: controls */}
       <div className="flex flex-col gap-4 min-w-[180px] w-full xl:w-[210px]">
-        <div>
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="bg-primary px-4 py-2 rounded-lg text-white font-semibold mb-2 flex gap-2 items-center hover-scale w-full"
-          >
-            <ImageIcon size={20} /> Upload Photo
-          </button>
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          className="bg-primary px-4 py-2 rounded-lg text-white font-semibold mb-2 flex gap-2 items-center hover-scale w-full"
+        >
+          <ImageIcon size={20} /> Upload Photo
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={handlePhotoUpload}
+        />
+        {!!photoDataUrl && (
+          <>
+            <div className="mb-2">
+              <label className="text-xs font-semibold mb-1 block">Photo X</label>
+              <input
+                type="range"
+                min={0} max={1} step={0.01}
+                value={photoX}
+                disabled={!photoImg}
+                onChange={e => setPhotoX(Number(e.target.value))}
+                className="accent-primary w-32"
+              />
+              <span className="inline-block w-12 ml-2 font-mono text-xs">{photoX.toFixed(2)}</span>
+            </div>
+            <div className="mb-2">
+              <label className="text-xs font-semibold mb-1 block">Photo Y</label>
+              <input
+                type="range"
+                min={0} max={1} step={0.01}
+                value={photoY}
+                disabled={!photoImg}
+                onChange={e => setPhotoY(Number(e.target.value))}
+                className="accent-primary w-32"
+              />
+              <span className="inline-block w-12 ml-2 font-mono text-xs">{photoY.toFixed(2)}</span>
+            </div>
+            <div className="mb-2">
+              <label className="text-xs font-semibold mb-1 block">Photo Scale</label>
+              <input
+                type="range"
+                min={0.2} max={3} step={0.01}
+                value={photoScale}
+                disabled={!photoImg}
+                onChange={e => setPhotoScale(Number(e.target.value))}
+                className="accent-primary w-32"
+              />
+              <span className="inline-block w-12 ml-2 font-mono text-xs">{photoScale.toFixed(2)}</span>
+            </div>
+          </>
+        )}
+        <hr className="my-2" />
+        <div className="mb-2">
+          <label className="text-xs font-semibold mb-1 block">Text</label>
           <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={handleUpload}
+            type="text"
+            value={overlay.text}
+            onChange={e => setOverlay(o => ({ ...o, text: e.target.value }))}
+            className="border rounded px-2 py-1 text-sm mb-1 w-full"
+            placeholder="Label"
           />
         </div>
-        {userImgUrl && (
-          <div className="flex flex-col gap-1">
-            <label htmlFor="profile-scale" className="text-xs text-muted-foreground mb-1">Resize Photo</label>
-            <div className="flex gap-2 items-center">
-              <Progress
-                className="h-3 w-32 bg-muted"
-                value={((photoPos.scale - MIN_SCALE) / (MAX_SCALE - MIN_SCALE)) * 100}
-              />
-              <input
-                id="profile-scale"
-                type="range"
-                min={MIN_SCALE}
-                max={MAX_SCALE}
-                step={0.01}
-                value={photoPos.scale}
-                onChange={e =>
-                  setPhotoPos(pos => ({
-                    ...pos,
-                    scale: parseFloat(e.target.value)
-                  }))
-                }
-                className="w-16"
-              />
-              <span className="text-xs font-mono">{photoPos.scale.toFixed(2)}x</span>
-            </div>
-          </div>
-        )}
-        {/* Image Crop/Resizer controls */}
-        <ImageCropperControls
-          onZoom={handlePhotoZoom}
-          onReset={handleResetPhoto}
-          isImageLoaded={!!userImgUrl}
-        />
+        <div className="mb-2">
+          <label className="text-xs font-semibold mb-1 block">Text X</label>
+          <input
+            type="range"
+            min={0} max={1} step={0.01}
+            value={overlay.x}
+            onChange={e => setOverlay(o => ({ ...o, x: Number(e.target.value) }))}
+            className="accent-primary w-32"
+          />
+          <span className="inline-block w-12 ml-2 font-mono text-xs">{overlay.x.toFixed(2)}</span>
+        </div>
+        <div className="mb-2">
+          <label className="text-xs font-semibold mb-1 block">Text Y</label>
+          <input
+            type="range"
+            min={0} max={1} step={0.01}
+            value={overlay.y}
+            onChange={e => setOverlay(o => ({ ...o, y: Number(e.target.value) }))}
+            className="accent-primary w-32"
+          />
+          <span className="inline-block w-12 ml-2 font-mono text-xs">{overlay.y.toFixed(2)}</span>
+        </div>
+        <div className="mb-2">
+          <label className="text-xs font-semibold mb-1 block">Text Scale</label>
+          <input
+            type="range"
+            min={0.2} max={2.5} step={0.01}
+            value={overlay.scale}
+            onChange={e => setOverlay(o => ({ ...o, scale: Number(e.target.value) }))}
+            className="accent-primary w-32"
+          />
+          <span className="inline-block w-12 ml-2 font-mono text-xs">{overlay.scale.toFixed(2)}x</span>
+        </div>
+        <div className="mb-2">
+          <label className="text-xs font-semibold mb-1 block">Text Color</label>
+          <input
+            type="color"
+            value={overlay.color}
+            onChange={e => setOverlay(o => ({ ...o, color: e.target.value }))}
+            className="rounded w-8 h-8 border"
+          />
+        </div>
         <button
-          className="bg-accent px-3 py-2 rounded focus:outline-none text-foreground hover:bg-accent/70 transition text-sm"
-          onClick={handleAddText}
+          className={`bg-primary px-4 py-2 rounded-lg text-white font-semibold my-2 w-full transition ${confirmed ? "bg-opacity-70 cursor-default" : ""}`}
+          disabled={!tplImg || !photoImg}
+          onClick={() => {
+            setConfirmed(true);
+            toast({ title: "Card Ready!", description: "You can now download it at full resolution." });
+          }}
         >
-          + Add Text Overlay
+          Confirm Layout
         </button>
-        <TextOverlayControls
-          textOverlay={textOverlays.find(t => t.id === selectedTextId)!}
-          onChange={patch =>
-            setTextOverlays(ovl =>
-              ovl.map(txt =>
-                txt.id === selectedTextId ? { ...txt, ...patch } : txt
-              )
-            )
-          }
-        />
         <DownloadDropdown
-          onDownload={handleDownload}
+          onDownload={fmt => {
+            if (!confirmed) {
+              toast({ title: "Confirm your card first!", description: "Adjust and confirm your layout before downloading." });
+              return;
+            }
+            handleDownload(fmt);
+          }}
         />
       </div>
-
-      {/* ===== PREVIEW AREA -- canvas with aspect/size locked ===== */}
       <div
-        ref={previewBoxRef}
         className="relative mx-auto bg-white shrink-0"
         style={{
           width: previewW,
@@ -461,11 +349,10 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
           overflow: "hidden"
         }}
       >
-        {/* Real canvas, handles all preview/display and baking */}
         <canvas
-          ref={previewCanvasRef}
-          width={previewW}
-          height={previewH}
+          ref={canvasRef}
+          width={tplDims.width}
+          height={tplDims.height}
           style={{
             width: previewW,
             height: previewH,
@@ -476,49 +363,6 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
             transition: "box-shadow 0.2s"
           }}
         />
-        {/* --- absolute DRAG overlays for photo + texts - for UX only! --- */}
-        {/* photo drag hit area */}
-        {userImgUrl && userImgDims.width && userImgDims.height && (
-          <div
-            onMouseDown={handlePhotoDown}
-            onTouchStart={handlePhotoDown}
-            className="absolute left-0 top-0"
-            style={{
-              cursor: "move",
-              width: previewW,
-              height: previewH,
-              zIndex: 5,
-              background: "transparent"
-            }}
-            title="Drag the photo"
-          />
-        )}
-        {/* Draggable text overlays (invisible box) */}
-        {textOverlays.map(ovl => {
-          const left = ovl.x * previewW;
-          const top = ovl.y * previewH;
-          const fontPx = Math.round(ovl.size * previewH);
-          return (
-            <div
-              key={ovl.id}
-              onMouseDown={e => handleOverlayDown(ovl, e)}
-              onTouchStart={e => handleOverlayDown(ovl, e)}
-              className={`absolute select-none`}
-              style={{
-                left, top,
-                width: 200, height: fontPx + 16,
-                transform: "translate(-10%,-15%)",
-                cursor: "move",
-                zIndex: 10,
-                background:
-                  selectedTextId === ovl.id ? "rgba(255,255,255,0.13)" : "transparent",
-                borderRadius: 6,
-              }}
-              title="Drag text"
-            />
-          );
-        })}
-        {/* Template loading fallback */}
         {(!templateImgUrl || !tplDims.width) && (
           <div className="absolute inset-0 bg-white/90 flex items-center justify-center rounded-2xl text-lg font-semibold text-gray-500 z-10">Loading template...</div>
         )}
@@ -526,5 +370,4 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
     </div>
   );
 };
-
-// NOTE: This file is getting long (>500 lines). Please consider refactoring into smaller hooks/components for maintainability!
+// NOTE: This file is now very long (>500 lines). Please consider refactoring into smaller hooks/components for maintainability!
