@@ -2,13 +2,13 @@
 [
   {
     "id": "template1",
-    "name": "Starry Night",
-    "img": "starry-night.jpg"
+    "name": "Bluey",
+    "img": "Template-1-SBV-BG-BlueTheme.png"
   },
   {
     "id": "template2",
-    "name": "Sunlit Forest",
-    "img": "sunlit-forest.jpg"
+    "name": "Green Flora",
+    "img": "Template-2-USJ-BG-FloraTheme.png"
   },
   {
     "id": "template3",

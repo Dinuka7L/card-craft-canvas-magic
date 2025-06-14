@@ -16,7 +16,7 @@ export const Header: React.FC = () => (
       }}
     />
     <span className="font-playfair text-xl sm:text-2xl font-bold select-none tracking-wide text-primary">
-      WishMe!
+      WishMe!     Birthday Card Maker
     </span>
   </header>
 );
