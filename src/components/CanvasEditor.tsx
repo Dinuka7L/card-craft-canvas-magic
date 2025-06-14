@@ -4,6 +4,7 @@ import { Image as ImageIcon } from "lucide-react";
 import { TextOverlayControls } from "./TextOverlayControls";
 import { DownloadDropdown } from "./DownloadDropdown";
 import { ImageCropperControls } from "./ImageCropperControls";
+import { Progress } from "./ui/progress";
 
 // Map template images using import.meta.glob and load templates from JSON:
 const imageMap: Record<string, string> = {};
@@ -183,19 +184,19 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
     const templateImgName = selTpl?.img || "";
     const templateSrc = imageMap[templateImgName] || "";
 
-    // Draw background (template)
-    const template = new window.Image();
-    template.crossOrigin = "anonymous";
-    template.src = templateSrc;
-    template.onload = () => {
-      ctx.drawImage(template, 0, 0, CANVAS_W, CANVAS_H);
+    // We will: (1) draw the uploaded profile image,
+    //          (2) draw overlays (text) with the right font/positions,
+    //          (3) draw the template on top (as a frame/foreground)
 
-      // Draw profile image (crop and placement applied)
+    // 1. Draw uploaded image (if any)
+    const drawAll = () => {
       if (profileImg) {
         const img = new window.Image();
         img.src = profileImg;
+        img.crossOrigin = "anonymous";
         img.onload = () => {
           ctx.save();
+          // Use the same size and positions as live canvas
           ctx.drawImage(
             img,
             imgPos.x,
@@ -204,55 +205,66 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
             150 * imgPos.scale
           );
           ctx.restore();
-
-          // Draw text overlays
+          // 2. Draw text overlays
           textOverlays.forEach(ovl => {
             ctx.font = `${ovl.size}px '${ovl.font}'`;
             ctx.fillStyle = ovl.color;
+            ctx.textBaseline = "top";
             ctx.fillText(ovl.text, ovl.x, ovl.y);
           });
-
-          let mime = (format === "png" ? "image/png" : "image/jpeg");
-          const link = document.createElement("a");
-          link.download = `birthday-card.${format}`;
-          link.href = canvas.toDataURL(mime, 1.0);
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-
-          toast({
-            title: "Download started!",
-            description: `Your card is downloading as ${format.toUpperCase()}.`
-          });
+          // 3. Draw the template last (on TOP)
+          const template = new window.Image();
+          template.crossOrigin = "anonymous";
+          template.src = templateSrc;
+          template.onload = () => {
+            ctx.drawImage(template, 0, 0, CANVAS_W, CANVAS_H);
+            finish();
+          };
+          template.onerror = finish;
         };
         img.onerror = () => {
-          toast({ title: "Image download error", description: "Could not load your photo." });
+          // Fallback: just text & template
+          drawTextAndTemplateOnly(ctx, templateSrc, finish);
         };
       } else {
-        // If no profile image, just draw overlays
-        textOverlays.forEach(ovl => {
-          ctx.font = `${ovl.size}px '${ovl.font}'`;
-          ctx.fillStyle = ovl.color;
-          ctx.fillText(ovl.text, ovl.x, ovl.y);
-        });
-
-        let mime = (format === "png" ? "image/png" : "image/jpeg");
-        const link = document.createElement("a");
-        link.download = `birthday-card.${format}`;
-        link.href = canvas.toDataURL(mime, 1.0);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-
-        toast({
-          title: "Download started!",
-          description: `Your card is downloading as ${format.toUpperCase()}.`
-        });
+        // No photo: just draw text and template
+        drawTextAndTemplateOnly(ctx, templateSrc, finish);
       }
     };
-    template.onerror = () => {
-      toast({ title: "Template image error", description: "Could not load background." });
+
+    const drawTextAndTemplateOnly = (ctx: CanvasRenderingContext2D, templateSrc: string, cb: () => void) => {
+      textOverlays.forEach(ovl => {
+        ctx.font = `${ovl.size}px '${ovl.font}'`;
+        ctx.fillStyle = ovl.color;
+        ctx.textBaseline = "top";
+        ctx.fillText(ovl.text, ovl.x, ovl.y);
+      });
+      const template = new window.Image();
+      template.crossOrigin = "anonymous";
+      template.src = templateSrc;
+      template.onload = () => {
+        ctx.drawImage(template, 0, 0, CANVAS_W, CANVAS_H);
+        cb();
+      };
+      template.onerror = cb;
     };
+
+    function finish() {
+      let mime = (format === "png" ? "image/png" : "image/jpeg");
+      const link = document.createElement("a");
+      link.download = `birthday-card.${format}`;
+      link.href = canvas.toDataURL(mime, 1.0);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      toast({
+        title: "Download started!",
+        description: `Your card is downloading as ${format.toUpperCase()}.`
+      });
+    }
+
+    drawAll();
   };
 
   // onChange for text overlays
@@ -268,6 +280,9 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
   const selTpl = templates.find(tpl => tpl.id === templateId);
   const templateImgName = selTpl?.img || "";
   const templateImg = imageMap[templateImgName] || "";
+
+  // New: Range for scale adjustment (used as progress bar)
+  const MIN_SCALE = 0.3, MAX_SCALE = 2.0;
 
   return (
     <div className="flex flex-col xl:flex-row gap-8 w-full max-w-full">
@@ -288,6 +303,34 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
             onChange={handleUpload}
           />
         </div>
+        {/* New: Progress bar for image scale */}
+        {profileImg && (
+          <div className="flex flex-col gap-1">
+            <label htmlFor="profile-scale" className="text-xs text-muted-foreground mb-1">Resize Photo</label>
+            <div className="flex gap-2 items-center">
+              <Progress
+                className="h-3 w-32 bg-muted"
+                value={((imgPos.scale - MIN_SCALE) / (MAX_SCALE - MIN_SCALE)) * 100}
+              />
+              <input
+                id="profile-scale"
+                type="range"
+                min={MIN_SCALE}
+                max={MAX_SCALE}
+                step={0.01}
+                value={imgPos.scale}
+                onChange={e =>
+                  setImgPos(pos => ({
+                    ...pos,
+                    scale: parseFloat(e.target.value)
+                  }))
+                }
+                className="w-16"
+              />
+              <span className="text-xs font-mono">{imgPos.scale.toFixed(2)}x</span>
+            </div>
+          </div>
+        )}
         {/* Image Cropping & Resizing controls */}
         <ImageCropperControls
           onZoom={handleZoom}
@@ -328,13 +371,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
           minWidth: CANVAS_W,
         }}
       >
-        {/* Template */}
-        <img
-          src={templateImg}
-          className="absolute inset-0 w-full h-full object-cover rounded-2xl pointer-events-none"
-          alt="Template"
-        />
-        {/* Profile pic */}
+        {/* Uploaded photo: now behind template and overlays! */}
         {profileImg && (
           <div
             className="absolute"
@@ -344,10 +381,10 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
               width: 150 * imgPos.scale,
               height: 150 * imgPos.scale,
               cursor: dragMode === "move" ? "grabbing" : "grab",
-              borderRadius: 12, // small rounding optional, or 0
+              borderRadius: 12,
               overflow: "hidden",
               boxShadow: "0 3px 12px #0005",
-              zIndex: 2,
+              zIndex: 1, // lower z-index
               transition: "box-shadow .2s"
             }}
             onMouseDown={handleImgMouseDown}
@@ -363,7 +400,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
             />
           </div>
         )}
-        {/* Drag/move text overlays */}
+        {/* Text overlays */}
         {textOverlays.map(ovl => (
           <span
             key={ovl.id}
@@ -431,7 +468,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
               textShadow: "0 2px 10px #0005",
               cursor: "move",
               userSelect: "none",
-              zIndex: 3,
+              zIndex: 2, // overlays above photo, below template
               padding: "4px 8px"
             }}
             className={`rounded transition duration-150 ${selectedTextId === ovl.id ? "bg-white/80 shadow" : ""}`}
@@ -439,6 +476,13 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
             {ovl.text}
           </span>
         ))}
+        {/* Template on top as frame */}
+        <img
+          src={templateImg}
+          className="absolute inset-0 w-full h-full object-cover rounded-2xl pointer-events-none"
+          alt="Template"
+          style={{ zIndex: 3 }}
+        />
       </div>
     </div>
   );

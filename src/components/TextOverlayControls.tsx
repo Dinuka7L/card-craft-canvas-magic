@@ -1,6 +1,7 @@
 
 import React from "react";
 import { TextOverlay } from "./CanvasEditor";
+import { Progress } from "./ui/progress";
 
 // Stylish color palette
 const COLORS = [
@@ -18,6 +19,8 @@ interface Props {
 
 export const TextOverlayControls: React.FC<Props> = ({ textOverlay, onChange }) => {
   if (!textOverlay) return null;
+
+  const minFont = 12, maxFont = 72;
 
   return (
     <div className="flex flex-col gap-1 mb-1">
@@ -47,15 +50,24 @@ export const TextOverlayControls: React.FC<Props> = ({ textOverlay, onChange }) 
           className="rounded w-7 h-7 p-0 border"
           title="Text color"
         />
+      </div>
+      <div className="flex gap-2 items-center">
+        <label htmlFor="font-progress" className="text-xs text-muted-foreground">Font Size</label>
+        <Progress
+          className="h-2 w-20 bg-muted"
+          value={((textOverlay.size - minFont) / (maxFont - minFont)) * 100}
+        />
         <input
-          type="number"
-          min={12}
-          max={100}
+          id="font-progress"
+          type="range"
+          min={minFont}
+          max={maxFont}
+          step={1}
           value={textOverlay.size}
           onChange={e => onChange({ size: Number(e.target.value) })}
-          className="w-14 border rounded px-1 text-sm"
-          style={{ fontFamily: 'Inter, sans-serif' }}
+          className="w-16 accent-primary"
         />
+        <span className="text-xs font-mono">{textOverlay.size}px</span>
       </div>
     </div>
   );
