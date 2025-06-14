@@ -6,6 +6,7 @@ import { Progress } from "./ui/progress";
 import { useDraggableOverlay } from "./useDraggableOverlay";
 import { TextOverlay } from "./types/TextOverlay";
 import { TextOverlayEditor } from "./TextOverlayEditor";
+import { DraggableTextOverlay } from "./DraggableTextOverlay";
 
 // ========== Load template image assets via Vite glob ==========
 const imageMap: Record<string, string> = {};
@@ -196,26 +197,6 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
     },
     previewW // scale drag delta to preview size
   );
-
-  // Drag logic for overlays (array of hooks per overlay)
-  // We use overlay index for controlled state
-  const overlayDragBinds = overlays.map((overlay, idx) => (
-    useDraggableOverlay(
-      { x: overlay.x, y: overlay.y },
-      ({ x, y }) => {
-        setOverlays(ovr => {
-          const arr = [...ovr];
-          arr[idx] = { ...arr[idx], x, y };
-          return arr;
-        });
-        setConfirmed(false);
-      },
-      {
-        minX: 0, maxX: 1, minY: 0, maxY: 1
-      },
-      previewW // scale drag to preview size
-    )
-  ));
 
   // Download logic (download button)
   const handleDownload = (format: "png" | "jpeg") => {
@@ -436,46 +417,26 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
           />
         )}
         {/* Drag handles and text overlays */}
-        {overlays.map((overlay, idx) => {
-          // Compute px location within preview (bounds: previewW x previewH)
-          const dragBind = overlayDragBinds[idx].bind;
-          const px = toPx(overlay.x, previewW);
-          const py = toPx(overlay.y, previewH);
-          return (
-            <div
-              key={idx}
-              {...dragBind}
-              style={{
-                position: "absolute",
-                left: px,
-                top: py,
-                zIndex: 10,
-                transform: "translate(0,0)",
-                color: overlay.color,
-                fontFamily: `${overlay.font}, Inter, Playfair Display, serif`,
-                fontSize: overlay.size * Math.min(previewW/tplDims.width, previewH/tplDims.height),
-                fontWeight: 700,
-                WebkitTextStroke: selectedOverlay === idx ? "1px #0af2" : "none",
-                textShadow: "0 0 8px #000a",
-                cursor: overlayDragBinds[idx].isDragging ? "grabbing" : "grab",
-                background: "none",
-                userSelect: "none",
-                touchAction: "none",
-                outline: selectedOverlay === idx ? "2px solid #4f63ff" : undefined,
-                pointerEvents: "auto",
-                padding: "4px 8px"
-              }}
-              tabIndex={0}
-              aria-label={`Text overlay: ${overlay.text}`}
-              onClick={e => {
-                e.stopPropagation();
-                setSelectedOverlay(idx);
-              }}
-            >
-              {overlay.text}
-            </div>
-          );
-        })}
+        {overlays.map((overlay, idx) => (
+          <DraggableTextOverlay
+            key={idx}
+            overlay={overlay}
+            idx={idx}
+            previewW={previewW}
+            previewH={previewH}
+            tplDims={tplDims}
+            selected={selectedOverlay === idx}
+            onDrag={(i, x, y) => {
+              setOverlays(ovr => {
+                const arr = [...ovr];
+                arr[i] = { ...arr[i], x, y };
+                return arr;
+              });
+              setConfirmed(false);
+            }}
+            onClick={setSelectedOverlay}
+          />
+        ))}
         <canvas
           ref={canvasRef}
           width={tplDims.width}
