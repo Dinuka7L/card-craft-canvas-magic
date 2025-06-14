@@ -1,8 +1,11 @@
 import React, { useRef, useEffect, useState } from "react";
 import { toast } from "@/hooks/use-toast";
-import { Image as ImageIcon } from "lucide-react";
+import { Image as ImageIcon, Plus } from "lucide-react";
 import { DownloadDropdown } from "./DownloadDropdown";
 import { Progress } from "./ui/progress";
+import { useDraggableOverlay } from "./useDraggableOverlay";
+import { TextOverlay } from "./types/TextOverlay";
+import { TextOverlayEditor } from "./TextOverlayEditor";
 
 // ========== Load template image assets via Vite glob ==========
 const imageMap: Record<string, string> = {};
@@ -20,13 +23,16 @@ interface TemplateMeta {
 interface CanvasEditorProps {
   templateId: string;
 }
-interface OverlayControlState {
-  text: string;
-  x: number; // [0,1]
-  y: number; // [0,1]
-  scale: number; // font-size scalar
-  color: string;
+
+interface OverlayState extends TextOverlay {
+  x: number;
+  y: number;
 }
+
+const AVAILABLE_FONTS = [
+  "Playfair Display",
+  "Inter"
+];
 
 export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
   // -- Templates
@@ -38,7 +44,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
   }, []);
   const templateMeta = templates.find(t => t.id === templateId);
   const templateImgUrl = templateMeta ? imageMap[templateMeta.img] : "";
-  
+
   // -- Template & User Images
   const [tplImg, setTplImg] = useState<HTMLImageElement | null>(null);
   const [tplDims, setTplDims] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
@@ -61,20 +67,25 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
   const [photoY, setPhotoY] = useState(0.5);
   const [photoScale, setPhotoScale] = useState(1);
 
-  // Single text overlay (for simplicity, can extend to more layers if needed)
-  const [overlay, setOverlay] = useState<OverlayControlState>({
+  // -- Multiple Overlays
+  const defaultOverlay: OverlayState = {
     text: "Happy Birthday!",
     x: 0.15,
     y: 0.44,
-    scale: 1,
     color: "#fff",
-  });
+    font: "Playfair Display",
+    size: 48,
+  };
+  const [overlays, setOverlays] = useState<OverlayState[]>([defaultOverlay]);
+  const [selectedOverlay, setSelectedOverlay] = useState<number>(0);
 
   // Confirm/download buttons state
   const [confirmed, setConfirmed] = useState(false);
 
   // -- Canvas Ref
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // -- Preview ref (for measuring pixel drag offset)
+  const previewRef = useRef<HTMLDivElement>(null);
 
   // -- File input ref
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -132,25 +143,26 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
     ctx.drawImage(tplImg, 0, 0, canvas.width, canvas.height);
 
     // text overlays
-    ctx.save();
-    const fontPx = 60 * overlay.scale; // editable base px * scale
-    ctx.font = `${fontPx}px Montserrat, Inter, Playfair Display, sans-serif`;
-    ctx.fillStyle = overlay.color;
-    ctx.textBaseline = "top";
-    const nx = overlay.x * canvas.width;
-    const ny = overlay.y * canvas.height;
-    ctx.shadowColor = "#000";
-    ctx.shadowBlur = 8;
-    ctx.fillText(overlay.text || "", nx, ny);
-    ctx.shadowBlur = 0;
-    ctx.restore();
+    overlays.forEach(overlay => {
+      ctx.save();
+      ctx.font = `${overlay.size}px ${overlay.font}, Montserrat, Inter, Playfair Display, sans-serif`;
+      ctx.fillStyle = overlay.color;
+      ctx.textBaseline = "top";
+      const nx = overlay.x * canvas.width;
+      const ny = overlay.y * canvas.height;
+      ctx.shadowColor = "#000";
+      ctx.shadowBlur = 8;
+      ctx.fillText(overlay.text || "", nx, ny);
+      ctx.shadowBlur = 0;
+      ctx.restore();
+    });
   };
 
   // keep preview up-to-date
   useEffect(() => {
     drawCanvas();
     // eslint-disable-next-line
-  }, [tplImg, tplDims, photoImg, photoDims, photoX, photoY, photoScale, overlay]);
+  }, [tplImg, tplDims, photoImg, photoDims, photoX, photoY, photoScale, overlays]);
 
   // ============ UI ============
   // Responsive preview (scale canvas to fit max bounds, preserve aspect)
@@ -162,6 +174,48 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
     previewW = Math.round(tplDims.width * r);
     previewH = Math.round(tplDims.height * r);
   }
+
+  // px <-> norm helpers
+  const toNorm = (px: number, total: number) => Math.max(0, Math.min(1, px / total));
+  const toPx = (n: number, total: number) => n * total;
+
+  // Drag logic for photo
+  const {
+    bind: photoDragBind,
+    isDragging: isPhotoDragging
+  } = useDraggableOverlay(
+    { x: photoX, y: photoY },
+    ({ x, y }) => {
+      setPhotoX(x);
+      setPhotoY(y);
+      setConfirmed(false);
+    },
+    {
+      minX: 0, maxX: 1,
+      minY: 0, maxY: 1,
+    },
+    previewW // scale drag delta to preview size
+  );
+
+  // Drag logic for overlays (array of hooks per overlay)
+  // We use overlay index for controlled state
+  const overlayDragBinds = overlays.map((overlay, idx) => (
+    useDraggableOverlay(
+      { x: overlay.x, y: overlay.y },
+      ({ x, y }) => {
+        setOverlays(ovr => {
+          const arr = [...ovr];
+          arr[idx] = { ...arr[idx], x, y };
+          return arr;
+        });
+        setConfirmed(false);
+      },
+      {
+        minX: 0, maxX: 1, minY: 0, maxY: 1
+      },
+      previewW // scale drag to preview size
+    )
+  ));
 
   // Download logic (download button)
   const handleDownload = (format: "png" | "jpeg") => {
@@ -194,22 +248,61 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
     setPhotoDataUrl(null);
     setPhotoImg(null);
     setConfirmed(false);
-    setOverlay({
-      text: "Happy Birthday!",
-      x: 0.15,
-      y: 0.44,
-      scale: 1,
-      color: "#fff",
-    });
+    setOverlays([defaultOverlay]);
+    setSelectedOverlay(0);
     setPhotoX(0.5);
     setPhotoY(0.5);
     setPhotoScale(1);
   }, [templateId]);
 
+  // Add new overlay
+  const handleAddTextOverlay = () => {
+    setOverlays(arr => [
+      ...arr,
+      {
+        text: "New Text",
+        color: "#fff",
+        font: "Playfair Display",
+        size: 32,
+        x: 0.5, y: 0.8
+      }
+    ]);
+    setSelectedOverlay(overlays.length);
+    setConfirmed(false);
+  };
+
+  // Remove overlay
+  const handleRemoveOverlay = (idx: number) => {
+    setOverlays(arr => arr.filter((_, i) => i !== idx));
+    // select previous or first
+    setSelectedOverlay(prev =>
+      prev === idx
+        ? Math.max(0, idx - 1)
+        : (prev > idx ? prev - 1 : prev)
+    );
+    setConfirmed(false);
+  };
+
+  // Overlay controls update
+  const handleOverlayChange = (idx: number, patch: Partial<TextOverlay>) => {
+    setOverlays(arr => {
+      const a = [...arr];
+      a[idx] = { ...a[idx], ...patch };
+      return a;
+    });
+    setConfirmed(false);
+  };
+
+  // Preview overlay selection by clicking in list or on overlay itself
+  const handleOverlayPreviewClick = (idx: number) => {
+    setSelectedOverlay(idx);
+  };
+
+  // ========== RENDER ==========
   return (
     <div className="flex flex-col xl:flex-row gap-8 w-full max-w-full">
       {/* Left: controls */}
-      <div className="flex flex-col gap-4 min-w-[180px] w-full xl:w-[210px]">
+      <div className="flex flex-col gap-4 min-w-[200px] w-full xl:w-[290px]">
         <button
           onClick={() => fileInputRef.current?.click()}
           className="bg-primary px-4 py-2 rounded-lg text-white font-semibold mb-2 flex gap-2 items-center hover-scale w-full"
@@ -226,7 +319,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
         {!!photoDataUrl && (
           <>
             <div className="mb-2">
-              <label className="text-xs font-semibold mb-1 block">Photo X</label>
+              <label className="text-xs font-semibold mb-1 block">Photo X/Y (Drag or use slider)</label>
               <input
                 type="range"
                 min={0} max={1} step={0.01}
@@ -236,9 +329,6 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
                 className="accent-primary w-32"
               />
               <span className="inline-block w-12 ml-2 font-mono text-xs">{photoX.toFixed(2)}</span>
-            </div>
-            <div className="mb-2">
-              <label className="text-xs font-semibold mb-1 block">Photo Y</label>
               <input
                 type="range"
                 min={0} max={1} step={0.01}
@@ -264,57 +354,32 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
           </>
         )}
         <hr className="my-2" />
-        <div className="mb-2">
-          <label className="text-xs font-semibold mb-1 block">Text</label>
-          <input
-            type="text"
-            value={overlay.text}
-            onChange={e => setOverlay(o => ({ ...o, text: e.target.value }))}
-            className="border rounded px-2 py-1 text-sm mb-1 w-full"
-            placeholder="Label"
-          />
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-sm">Text Overlays</span>
+          <button
+            className="p-1 rounded border border-primary text-primary hover:bg-primary/10"
+            onClick={handleAddTextOverlay}
+            type="button"
+            aria-label="Add text overlay"
+          >
+            <Plus size={18} />
+          </button>
         </div>
-        <div className="mb-2">
-          <label className="text-xs font-semibold mb-1 block">Text X</label>
-          <input
-            type="range"
-            min={0} max={1} step={0.01}
-            value={overlay.x}
-            onChange={e => setOverlay(o => ({ ...o, x: Number(e.target.value) }))}
-            className="accent-primary w-32"
-          />
-          <span className="inline-block w-12 ml-2 font-mono text-xs">{overlay.x.toFixed(2)}</span>
-        </div>
-        <div className="mb-2">
-          <label className="text-xs font-semibold mb-1 block">Text Y</label>
-          <input
-            type="range"
-            min={0} max={1} step={0.01}
-            value={overlay.y}
-            onChange={e => setOverlay(o => ({ ...o, y: Number(e.target.value) }))}
-            className="accent-primary w-32"
-          />
-          <span className="inline-block w-12 ml-2 font-mono text-xs">{overlay.y.toFixed(2)}</span>
-        </div>
-        <div className="mb-2">
-          <label className="text-xs font-semibold mb-1 block">Text Scale</label>
-          <input
-            type="range"
-            min={0.2} max={2.5} step={0.01}
-            value={overlay.scale}
-            onChange={e => setOverlay(o => ({ ...o, scale: Number(e.target.value) }))}
-            className="accent-primary w-32"
-          />
-          <span className="inline-block w-12 ml-2 font-mono text-xs">{overlay.scale.toFixed(2)}x</span>
-        </div>
-        <div className="mb-2">
-          <label className="text-xs font-semibold mb-1 block">Text Color</label>
-          <input
-            type="color"
-            value={overlay.color}
-            onChange={e => setOverlay(o => ({ ...o, color: e.target.value }))}
-            className="rounded w-8 h-8 border"
-          />
+        <div className="flex flex-col gap-1">
+          {overlays.map((ovl, idx) => (
+            <div
+              key={idx}
+              className={`cursor-pointer`}
+              onClick={() => handleOverlayPreviewClick(idx)}
+            >
+              <TextOverlayEditor
+                overlay={ovl}
+                onChange={patch => handleOverlayChange(idx, patch)}
+                onDelete={overlays.length > 1 ? () => handleRemoveOverlay(idx) : undefined}
+                isSelected={selectedOverlay === idx}
+              />
+            </div>
+          ))}
         </div>
         <button
           className={`bg-primary px-4 py-2 rounded-lg text-white font-semibold my-2 w-full transition ${confirmed ? "bg-opacity-70 cursor-default" : ""}`}
@@ -337,7 +402,8 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
         />
       </div>
       <div
-        className="relative mx-auto bg-white shrink-0"
+        className="relative mx-auto bg-white shrink-0 select-none touch-none"
+        ref={previewRef}
         style={{
           width: previewW,
           height: previewH,
@@ -346,9 +412,70 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ templateId }) => {
           borderRadius: 24,
           background: "#fff",
           boxShadow: "0 4px 24px 0 #0002",
-          overflow: "hidden"
+          overflow: "hidden",
+          userSelect: "none"
         }}
       >
+        {/* Photo drag overlay */}
+        {!!photoDataUrl && photoImg && (
+          <div
+            {...photoDragBind}
+            style={{
+              position: "absolute",
+              left: toPx(photoX, previewW) - (photoDims.width * photoScale * previewW / tplDims.width) / 2,
+              top: toPx(photoY, previewH) - (photoDims.height * photoScale * previewH / tplDims.height) / 2,
+              width: (photoDims.width * photoScale * previewW / tplDims.width),
+              height: (photoDims.height * photoScale * previewH / tplDims.height),
+              background: "transparent",
+              zIndex: 2,
+              ...photoDragBind.style,
+              touchAction: "none"
+            }}
+            aria-label="Drag photo"
+            tabIndex={-1}
+          />
+        )}
+        {/* Drag handles and text overlays */}
+        {overlays.map((overlay, idx) => {
+          // Compute px location within preview (bounds: previewW x previewH)
+          const dragBind = overlayDragBinds[idx].bind;
+          const px = toPx(overlay.x, previewW);
+          const py = toPx(overlay.y, previewH);
+          return (
+            <div
+              key={idx}
+              {...dragBind}
+              style={{
+                position: "absolute",
+                left: px,
+                top: py,
+                zIndex: 10,
+                transform: "translate(0,0)",
+                color: overlay.color,
+                fontFamily: `${overlay.font}, Inter, Playfair Display, serif`,
+                fontSize: overlay.size * Math.min(previewW/tplDims.width, previewH/tplDims.height),
+                fontWeight: 700,
+                WebkitTextStroke: selectedOverlay === idx ? "1px #0af2" : "none",
+                textShadow: "0 0 8px #000a",
+                cursor: overlayDragBinds[idx].isDragging ? "grabbing" : "grab",
+                background: "none",
+                userSelect: "none",
+                touchAction: "none",
+                outline: selectedOverlay === idx ? "2px solid #4f63ff" : undefined,
+                pointerEvents: "auto",
+                padding: "4px 8px"
+              }}
+              tabIndex={0}
+              aria-label={`Text overlay: ${overlay.text}`}
+              onClick={e => {
+                e.stopPropagation();
+                setSelectedOverlay(idx);
+              }}
+            >
+              {overlay.text}
+            </div>
+          );
+        })}
         <canvas
           ref={canvasRef}
           width={tplDims.width}
